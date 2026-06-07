@@ -298,6 +298,9 @@ function exportarExcel(linhas, prefixo) {
     Fatura: f.nome || '',
     Fornecedor: f.fornecedor || '',
     'Valor (R$)': f.valor || 0,
+    'Moeda Original': f.moeda_original || 'BRL',
+    'Valor Original': f.valor_original || '',
+    'PTAX Média': f.taxa_ptax || '',
     'Data DRE': f.data_dre ? fmtData(f.data_dre) : '',
     'Data Pagamento': f.data_pagamento ? fmtData(f.data_pagamento) : '',
     Categoria: f.categoria || '',
@@ -306,7 +309,7 @@ function exportarExcel(linhas, prefixo) {
   const ws = XLSX.utils.json_to_sheet(dados);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Faturas');
-  ws['!cols'] = [{wch:35},{wch:22},{wch:15},{wch:14},{wch:16},{wch:18},{wch:30}];
+  ws['!cols'] = [{wch:35},{wch:22},{wch:15},{wch:8},{wch:14},{wch:10},{wch:14},{wch:16},{wch:18},{wch:30}];
   XLSX.writeFile(wb, `${prefixo}_${new Date().toISOString().split('T')[0]}.xlsx`);
   showToast('✅ Excel baixado!');
 }
@@ -335,11 +338,24 @@ function sugerirFornecedorPorTexto(texto) {
   return '';
 }
 
-function parseBRL(s) {
+function parseNumber(s) {
   if (!s) return NaN;
-  const clean = String(s).trim();
-  if (clean.includes(',')) return parseFloat(clean.replace(/\./g, '').replace(',', '.'));
-  return parseFloat(clean);
+  const clean = String(s).trim().replace(/[^\d.,-]/g, '');
+  if (!clean) return NaN;
+  const lastDot = clean.lastIndexOf('.');
+  const lastComma = clean.lastIndexOf(',');
+  if (lastDot === -1 && lastComma === -1) return parseFloat(clean);
+  const decimal = lastDot > lastComma ? '.' : ',';
+  const thousands = decimal === '.' ? ',' : '.';
+  return parseFloat(clean.split(thousands).join('').replace(decimal, '.'));
+}
+
+function detectCurrency(texto) {
+  if (!texto) return '';
+  const t = texto.toLowerCase();
+  if (/us\$|\busd\b|d[óo]lar|dollars?/i.test(t)) return 'USD';
+  if (/r\$|\bbrl\b|reais|\breal\b/i.test(t)) return 'BRL';
+  return '';
 }
 
 function dmyToIso(dmy) {
@@ -348,43 +364,55 @@ function dmyToIso(dmy) {
   return `${p[2]}-${p[1].padStart(2,'0')}-${p[0].padStart(2,'0')}`;
 }
 
+function mdyToIso(mdy) {
+  const p = mdy.split('/');
+  if (p.length !== 3) return '';
+  return `${p[2]}-${p[0].padStart(2,'0')}-${p[1].padStart(2,'0')}`;
+}
+
 function parseInvoiceText(texto) {
-  const out = { valor: '', data_pagamento: '', data_dre: '', fornecedor: '' };
+  const out = { valor: '', moeda: '', data_pagamento: '', data_dre: '', fornecedor: '' };
   if (!texto) return out;
 
-  // Valor: prioriza padrões "Total a pagar" / "Valor total"
+  out.moeda = detectCurrency(texto);
+
+  // Valor: prioriza padrões "Total a pagar" / "Valor total" (aceita R$, US$, $)
+  const symGroup = '(?:US\\$|R\\$|USD|BRL|\\$)?';
   const padroesValor = [
-    /total\s+a\s+pagar[^\d\n]{0,15}R?\$?\s*([\d.,]+)/i,
-    /valor\s+total[^\d\n]{0,15}R?\$?\s*([\d.,]+)/i,
-    /valor\s+do\s+documento[^\d\n]{0,15}R?\$?\s*([\d.,]+)/i,
-    /total[^\d\n]{0,10}R?\$?\s*([\d.,]+\d{2})/i,
+    new RegExp(`total\\s+a\\s+pagar[^\\d\\n]{0,15}${symGroup}\\s*([\\d.,]+)`, 'i'),
+    new RegExp(`valor\\s+total[^\\d\\n]{0,15}${symGroup}\\s*([\\d.,]+)`, 'i'),
+    new RegExp(`amount\\s+due[^\\d\\n]{0,15}${symGroup}\\s*([\\d.,]+)`, 'i'),
+    new RegExp(`valor\\s+do\\s+documento[^\\d\\n]{0,15}${symGroup}\\s*([\\d.,]+)`, 'i'),
+    new RegExp(`total[^\\d\\n]{0,10}${symGroup}\\s*([\\d.,]+\\d{2})`, 'i'),
   ];
   for (const p of padroesValor) {
     const m = texto.match(p);
     if (m) {
-      const v = parseBRL(m[1]);
+      const v = parseNumber(m[1]);
       if (!isNaN(v) && v > 0) { out.valor = v.toFixed(2); break; }
     }
   }
   if (!out.valor) {
-    const matches = [...texto.matchAll(/R\$\s*([\d.,]+)/g)]
-      .map(m => parseBRL(m[1])).filter(v => !isNaN(v) && v > 0);
+    const symRegex = out.moeda === 'USD' ? /(?:US\$|USD|\$)\s*([\d.,]+)/g : /R\$\s*([\d.,]+)/g;
+    const matches = [...texto.matchAll(symRegex)]
+      .map(m => parseNumber(m[1])).filter(v => !isNaN(v) && v > 0);
     if (matches.length) out.valor = Math.max(...matches).toFixed(2);
   }
+  if (!out.moeda && out.valor) out.moeda = 'BRL';
 
-  // Data de pagamento: rótulo "Vencimento"
+  // Data: USD usa MM/DD/YYYY; BRL usa DD/MM/YYYY
+  const dateToIso = out.moeda === 'USD' ? mdyToIso : dmyToIso;
+
   const vencMatch = texto.match(/venc(?:imento|e\s+em|er)[^\d]{0,20}(\d{2}\/\d{2}\/\d{4})/i)
-    || texto.match(/(?:pagar\s+at[ée]|data\s+(?:de\s+)?pagamento)[^\d]{0,20}(\d{2}\/\d{2}\/\d{4})/i);
-  if (vencMatch) out.data_pagamento = dmyToIso(vencMatch[1]);
+    || texto.match(/(?:pagar\s+at[ée]|data\s+(?:de\s+)?pagamento|due\s+(?:date|by))[^\d]{0,20}(\d{2}\/\d{2}\/\d{4})/i);
+  if (vencMatch) out.data_pagamento = dateToIso(vencMatch[1]);
 
-  // Data de emissão / competência
-  const emisMatch = texto.match(/(?:emiss[ãa]o|emit(?:ida|ido)|data\s+(?:da\s+)?(?:nota|fatura))[^\d]{0,20}(\d{2}\/\d{2}\/\d{4})/i);
-  if (emisMatch) out.data_dre = dmyToIso(emisMatch[1]);
+  const emisMatch = texto.match(/(?:emiss[ãa]o|emit(?:ida|ido)|data\s+(?:da\s+)?(?:nota|fatura)|invoice\s+date|issued)[^\d]{0,20}(\d{2}\/\d{2}\/\d{4})/i);
+  if (emisMatch) out.data_dre = dateToIso(emisMatch[1]);
 
-  // Fallback de datas
   if (!out.data_pagamento || !out.data_dre) {
     const todasDatas = [...texto.matchAll(/(\d{2}\/\d{2}\/\d{4})/g)]
-      .map(m => dmyToIso(m[1])).filter(Boolean).sort();
+      .map(m => dateToIso(m[1])).filter(Boolean).sort();
     if (todasDatas.length) {
       if (!out.data_dre) out.data_dre = todasDatas[0];
       if (!out.data_pagamento) out.data_pagamento = todasDatas[todasDatas.length - 1];
@@ -438,6 +466,39 @@ function sugerirMesPorNome(nomeLimpo) {
   return meses[mt] ? `${ano}-${meses[mt]}-01` : '';
 }
 
+// ===== COTAÇÃO USD/BRL (PTAX - Banco Central) =====
+const RATE_CACHE_KEY = 'fx_usd_brl_monthly_v1';
+const RATE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function getRateCache() {
+  try { return JSON.parse(localStorage.getItem(RATE_CACHE_KEY) || '{}'); } catch { return {}; }
+}
+
+async function fetchMonthlyUSDRate(yyyyMm) {
+  const cache = getRateCache();
+  const cached = cache[yyyyMm];
+  const isCurrent = yyyyMm === new Date().toISOString().substring(0, 7);
+  if (cached && (!isCurrent || (Date.now() - cached.ts) < RATE_TTL_MS)) return cached;
+
+  const [year, month] = yyyyMm.split('-').map(Number);
+  const firstDay = `${String(month).padStart(2,'0')}-01-${year}`;
+  const lastDayOfMonth = new Date(year, month, 0).getDate();
+  const today = new Date();
+  const endDay = (today.getFullYear() === year && today.getMonth() + 1 === month) ? today.getDate() : lastDayOfMonth;
+  const lastDay = `${String(month).padStart(2,'0')}-${String(endDay).padStart(2,'0')}-${year}`;
+
+  const url = `https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/CotacaoDolarPeriodo(dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)?@dataInicial='${firstDay}'&@dataFinalCotacao='${lastDay}'&$format=json&$select=cotacaoVenda`;
+  const res = await fetch(url);
+  const data = await res.json();
+  const rates = (data.value || []).map(r => r.cotacaoVenda).filter(r => typeof r === 'number' && r > 0);
+  if (!rates.length) throw new Error('PTAX indisponível para ' + yyyyMm);
+  const media = rates.reduce((s, r) => s + r, 0) / rates.length;
+  const entry = { rate: media, samples: rates.length, ts: Date.now() };
+  cache[yyyyMm] = entry;
+  localStorage.setItem(RATE_CACHE_KEY, JSON.stringify(cache));
+  return entry;
+}
+
 async function parseFile(file) {
   const nomeArquivo = file.name;
   const nomeLimpo = nomeArquivo.replace(/\.(pdf|xlsx|xls|csv|png|jpg|jpeg)$/i, '');
@@ -446,6 +507,7 @@ async function parseFile(file) {
 
   let fornecedor = sugerirFornecedorPorTexto(nomeLimpo);
   let valor = '';
+  let moeda = '';
   let data_pagamento = '';
   let data_dre = sugerirMesPorNome(nomeLimpo) || new Date().toISOString().split('T')[0];
 
@@ -460,12 +522,13 @@ async function parseFile(file) {
   if (texto) {
     const parsed = parseInvoiceText(texto);
     if (parsed.valor) valor = parsed.valor;
+    if (parsed.moeda) moeda = parsed.moeda;
     if (parsed.data_pagamento) data_pagamento = parsed.data_pagamento;
     if (parsed.data_dre) data_dre = parsed.data_dre;
     if (parsed.fornecedor && !fornecedor) fornecedor = parsed.fornecedor;
   }
 
-  return {
+  const out = {
     arquivo_nome: nomeArquivo,
     arquivo_anexado: { name: nomeArquivo, base64, mimeType: file.type || 'application/octet-stream' },
     fornecedor,
@@ -473,8 +536,27 @@ async function parseFile(file) {
     valor,
     data_dre,
     data_pagamento,
+    moeda_original: '',
+    valor_original: '',
+    taxa_ptax: '',
     observacoes: `Anexado: ${nomeArquivo}`
   };
+
+  if (moeda === 'USD' && valor) {
+    try {
+      const yyyyMm = data_dre.substring(0, 7);
+      const rate = await fetchMonthlyUSDRate(yyyyMm);
+      const valorBrl = parseFloat(valor) * rate.rate;
+      out.valor_original = valor;
+      out.moeda_original = 'USD';
+      out.taxa_ptax = rate.rate.toFixed(4);
+      out.valor = valorBrl.toFixed(2);
+    } catch (e) {
+      console.warn('Conversão USD→BRL falhou:', e);
+    }
+  }
+
+  return out;
 }
 
 // ===== COMPONENTE PRINCIPAL =====
@@ -529,7 +611,8 @@ function App() {
 
   const [form, setForm] = useState({
     fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
-    categoria: '', observacoes: '', arquivo_nome: '', arquivo_anexado: null
+    categoria: '', observacoes: '', arquivo_nome: '', arquivo_anexado: null,
+    moeda_original: '', valor_original: '', taxa_ptax: ''
   });
   const [tick, setTick] = useState(0);
   const refresh = () => setTick(t => t + 1);
@@ -547,7 +630,8 @@ function App() {
 
   const resetForm = () => setForm({
     fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
-    categoria: '', observacoes: '', arquivo_nome: '', arquivo_anexado: null
+    categoria: '', observacoes: '', arquivo_nome: '', arquivo_anexado: null,
+    moeda_original: '', valor_original: '', taxa_ptax: ''
   });
 
   // ===== LEITURA DE FATURA (PDF.js + heurísticas) =====
@@ -558,7 +642,8 @@ function App() {
       setForm(f => ({ ...f, ...sugerido }));
       if (abrirForm) setShowForm(true);
       const partes = [];
-      if (sugerido.valor) partes.push(fmt(parseFloat(sugerido.valor)));
+      if (sugerido.moeda_original === 'USD') partes.push(`USD ${parseFloat(sugerido.valor_original).toFixed(2)} → ${fmt(parseFloat(sugerido.valor))} @ PTAX ${parseFloat(sugerido.taxa_ptax).toFixed(4)}`);
+      else if (sugerido.valor) partes.push(fmt(parseFloat(sugerido.valor)));
       if (sugerido.fornecedor) partes.push(sugerido.fornecedor);
       if (sugerido.data_pagamento) partes.push('vence ' + fmtData(sugerido.data_pagamento));
       showToast(partes.length ? `📄 Extraído: ${partes.join(' • ')}` : '📄 Anexado — preencha os dados');
@@ -607,6 +692,9 @@ function App() {
       arquivo_anexado: form.arquivo_anexado || null,
       drive_file_id: editando?.drive_file_id || null,
       drive_link: editando?.drive_link || null,
+      moeda_original: form.moeda_original || '',
+      valor_original: form.valor_original ? parseFloat(form.valor_original) : '',
+      taxa_ptax: form.taxa_ptax ? parseFloat(form.taxa_ptax) : '',
       criado_em: editando?.criado_em || new Date().toISOString()
     };
 
@@ -651,7 +739,10 @@ function App() {
       data_dre: item.data_dre || '',
       data_pagamento: item.data_pagamento || '',
       categoria: item.categoria || '',
-      observacoes: item.observacoes || ''
+      observacoes: item.observacoes || '',
+      moeda_original: item.moeda_original || '',
+      valor_original: item.valor_original ? String(item.valor_original) : '',
+      taxa_ptax: item.taxa_ptax ? String(item.taxa_ptax) : ''
     });
     setEditando(item);
     setShowForm(true);
@@ -840,6 +931,9 @@ function App() {
               <div>
                 <label className="text-xs text-slate-400">Valor (R$) *</label>
                 <input type="number" step="0.01" value={form.valor} onChange={e => setForm({...form, valor: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" placeholder="0,00" />
+                {form.moeda_original === 'USD' && form.valor_original && (
+                  <p className="text-xs text-brand-400 mt-1">💵 USD {parseFloat(form.valor_original).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})} convertido @ PTAX média R$ {parseFloat(form.taxa_ptax).toLocaleString('pt-BR',{minimumFractionDigits:4})}</p>
+                )}
               </div>
               <div>
                 <label className="text-xs text-slate-400">Data DRE (Competência)</label>
