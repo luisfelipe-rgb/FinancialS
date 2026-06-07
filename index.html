@@ -3,303 +3,800 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FinancialS — Organizador Financeiro</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<title>FinancialS - Organizador Financeiro</title>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script>
-tailwind.config = {
-  theme: {
-    extend: {
-      colors: {
-        brand: { 400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9' }
-      }
-    }
-  }
-}
-</script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 * { font-family: 'Inter', sans-serif; }
 body { background: #0f172a; }
-input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
-input[type="number"]::-webkit-inner-spin-button { opacity: 0.5; }
-.scrollbar-thin::-webkit-scrollbar { width: 4px; }
-.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-.scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+.drag-over { border-color: #8b5cf6 !important; background: rgba(139,92,246,0.08) !important; }
 .fade-in { animation: fadeIn 0.3s ease-out; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 .toast { animation: slideDown 0.3s ease-out; }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+.scrollbar-thin::-webkit-scrollbar { width: 4px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
 </style>
 </head>
 <body class="text-white min-h-screen">
-  <div id="root" class="max-w-6xl mx-auto p-3 md:p-5 space-y-4"></div>
-  <div id="toast-container" class="fixed top-4 right-4 z-50"></div>
+<div id="app" class="max-w-6xl mx-auto p-3 md:p-5"></div>
+<div id="toast-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
 
-  <script type="text/babel">
-  const { useState, useEffect } = React;
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
 
-  // DATA STORE
-  const STORE_KEY = 'financials_v1';
-  function loadData() {
-    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || { faturas: [], saldoCaixa: 0 }; }
-    catch(e) { return { faturas: [], saldoCaixa: 0 }; }
-  }
-  function saveData(data) {
-    localStorage.setItem(STORE_KEY, JSON.stringify(data));
-  }
+// ===== STORE =====
+const STORE_KEY = 'financials_v4';
+function loadData() {
+  try { const raw = localStorage.getItem(STORE_KEY); if (raw) return JSON.parse(raw); } catch(e) {}
+  return { faturas: [], saldoCaixa: 0, nomeEmpresa: '' };
+}
+function saveData(data) {
+  localStorage.setItem(STORE_KEY, JSON.stringify(data));
+}
 
-  const CATS = [
-    { v: 'BPO', l: '📋 BPO', c: '#818cf8' },
-    { v: 'Viagens', l: '✈️ Viagens', c: '#34d399' },
-    { v: 'Provedores', l: '🔧 Provedores', c: '#fbbf24' },
-    { v: 'Publicidade', l: '📢 Publicidade', c: '#f472b6' },
-    { v: 'Nao categorizado', l: '❓ Outros', c: '#94a3b8' }
-  ];
-  const ST = ['Pendente','Pago','Vencido','Agendado'];
-  const STC = { Pendente:'#f59e0b', Pago:'#22c55e', Vencido:'#ef4444', Agendado:'#3b82f6' };
+let DB = loadData();
 
-  const fmt = v => v ? 'R$ ' + Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2}) : 'R$ 0,00';
-  const fmtD = d => d ? d.split('-').reverse().join('/') : '—';
-  const id = () => Date.now().toString(36) + Math.random().toString(36).substr(2,5);
+// ===== HELPERS =====
+const CATEGORIAS = [
+  { value: 'Publicidade', label: '📢 Publicidade', cor: '#f472b6' },
+  { value: 'Provedores', label: '🔧 Provedores', cor: '#fbbf24' },
+  { value: 'Viagens', label: '✈️ Viagens', cor: '#34d399' },
+  { value: 'BPO', label: '📋 BPO', cor: '#818cf8' },
+  { value: 'Nao categorizado', label: '❓ Outros', cor: '#94a3b8' }
+];
 
-  function App() {
-    const db = loadData();
-    const [f, setF] = useState(db.faturas || []);
-    const [sal, setSal] = useState(db.saldoCaixa || '');
-    const [aba, setAba] = useState('dre');
-    const [fCat, setFCat] = useState('');
-    const [fMes, setFMes] = useState('');
-    const [fMesC, setFMesC] = useState('');
-    const [busca, setBusca] = useState('');
-    const [form, setForm] = useState({ nome:'', fornecedor:'', valor:'', data_dre:'', data_pagamento:'', categoria:'', status:'Pendente', observacoes:'' });
-    const [showForm, setShowForm] = useState(false);
-    const [edit, setEdit] = useState(null);
-    const [toast, setToast] = useState('');
+function sugerirCategoria(nome, fornecedor) {
+  const txt = ((fornecedor||'') + ' ' + (nome||'')).toLowerCase();
+  if (txt.includes('meta')||txt.includes('facebook')||txt.includes('ads')||txt.includes('adplay')||txt.includes('publicidade')||txt.includes('tiktok')||txt.includes('google ads')) return 'Publicidade';
+  if (txt.includes('viagem')||txt.includes('hotel')||txt.includes('passagem')||txt.includes('uber')||txt.includes('traslado')||txt.includes('aeroporto')) return 'Viagens';
+  if (txt.includes('bpo')||txt.includes('gbarros')||txt.includes('serviços prestados')||txt.includes('terceiriz')||txt.includes('consultoria')) return 'BPO';
+  if (txt.includes('plugni')||txt.includes('telesign')||txt.includes('slack')||txt.includes('clickup')||txt.includes('aws')||txt.includes('sms')||txt.includes('provedor')||txt.includes('internet')) return 'Provedores';
+  return '';
+}
 
-    useEffect(() => {
-      const d = loadData(); d.saldoCaixa = parseFloat(sal)||0; saveData(d);
-    }, [sal, f]);
+function fmt(v) {
+  if (v === null || v === undefined || v === '') return 'R$ 0,00';
+  return 'R$ ' + parseFloat(v).toLocaleString('pt-BR', {minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function fmtData(d) {
+  if (!d) return '—';
+  const p = d.split('-');
+  if (p.length !== 3) return d;
+  return `${p[2]}/${p[1]}/${p[0]}`;
+}
+function mesAno(d) {
+  if (!d) return '';
+  const p = d.split('-');
+  if (p.length !== 3) return d;
+  const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  return `${meses[parseInt(p[1])-1]}/${p[0]}`;
+}
+function gerarId() { return Date.now().toString(36) + Math.random().toString(36).substr(2,8); }
 
-    useEffect(() => { if(toast) setTimeout(() => setToast(''), 2500); }, [toast]);
+let toastTimer = null;
+function showToast(msg, tipo = 'success') {
+  const el = document.getElementById('toast-container');
+  if (!el) return;
+  const div = document.createElement('div');
+  div.className = 'toast px-4 py-3 rounded-xl shadow-xl text-sm font-medium ' + (tipo === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 text-white border border-slate-600');
+  div.textContent = msg;
+  el.innerHTML = '';
+  el.appendChild(div);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.innerHTML = ''; }, 3000);
+}
 
-    const sv = (novas) => { const d = loadData(); d.faturas = novas; saveData(d); setF(novas); };
-    const tost = (m) => setToast(m);
+// ===== GOOGLE DRIVE =====
+const CLIENT_ID = ''; // USER PREENCHE depois
+const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+let tokenClient = null;
+let gapiInited = false;
+let gisInited = false;
 
-    const salvar = () => {
-      if (!form.nome || !form.valor) { tost('⚠️ Preencha nome e valor'); return; }
-      const ft = { id: edit ? edit.id : id(), nome: form.nome, fornecedor: form.fornecedor, valor: parseFloat(form.valor)||0, data_dre: form.data_dre, data_pagamento: form.data_pagamento, categoria: form.categoria||'Nao categorizado', status: form.status, observacoes: form.observacoes };
-      sv(edit ? f.map(x => x.id === edit.id ? ft : x) : [...f, ft]);
-      tost(edit ? '✅ Atualizada' : '✅ Cadastrada');
-      setForm({ nome:'', fornecedor:'', valor:'', data_dre:'', data_pagamento:'', categoria:'', status:'Pendente', observacoes:'' });
-      setShowForm(false); setEdit(null);
+function initGapi() {
+  gapi.load('client', async () => {
+    await gapi.client.init({});
+    gapiInited = true;
+  });
+}
+
+function initGis(clientId) {
+  if (!clientId) return;
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: clientId,
+    scope: SCOPES,
+    callback: (resp) => {
+      if (resp.error) { showToast('Erro auth: ' + resp.error, 'error'); return; }
+      showToast('✅ Google Drive conectado!');
+    }
+  });
+  gisInited = true;
+}
+
+function connectDrive(clientId) {
+  if (!clientId) { showToast('⚠️ Configure o Client ID primeiro', 'error'); return; }
+  if (!gisInited) initGis(clientId);
+  tokenClient.requestAccessToken({ prompt: 'consent' });
+}
+
+async function salvarNoDrive(fatura, clientId) {
+  if (!clientId) { showToast('⚠️ Configure o Client ID do Google Drive', 'error'); return false; }
+  if (!gisInited) initGis(clientId);
+  
+  return new Promise((resolve) => {
+    tokenClient.callback = async (resp) => {
+      if (resp.error) { showToast('Erro auth Drive', 'error'); resolve(false); return; }
+      try {
+        const mes = (fatura.data_dre || '').substring(0,7);
+        const nomeArquivo = `${mes}_${fatura.fornecedor || 'fornecedor'}_${fatura.valor}_${fatura.categoria || 'NC'}.json`;
+        const conteudo = JSON.stringify(fatura, null, 2);
+        
+        // Criar arquivo no Drive
+        const metadata = {
+          name: nomeArquivo,
+          mimeType: 'application/json',
+          parents: ['root']
+        };
+        const form = new FormData();
+        form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+        form.append('file', new Blob([conteudo], { type: 'application/json' }));
+        
+        const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+          method: 'POST',
+          headers: new Headers({ Authorization: 'Bearer ' + gapi.client.getToken().access_token }),
+          body: form
+        });
+        const result = await response.json();
+        if (result.id) {
+          showToast('✅ Salvo no Drive: ' + nomeArquivo);
+          resolve(true);
+        } else {
+          showToast('Erro ao salvar no Drive', 'error');
+          resolve(false);
+        }
+      } catch(e) {
+        showToast('Erro Drive: ' + e.message, 'error');
+        resolve(false);
+      }
+    };
+    tokenClient.requestAccessToken({ prompt: '' });
+  });
+}
+
+// ===== EXPORT EXCEL =====
+function exportarExcel(linhas, prefixo) {
+  if (!linhas || linhas.length === 0) { showToast('⚠️ Nenhum dado para exportar', 'error'); return; }
+  const dados = linhas.map(f => ({
+    Fatura: f.nome || '',
+    Fornecedor: f.fornecedor || '',
+    'Valor (R$)': f.valor || 0,
+    'Data DRE': f.data_dre ? fmtData(f.data_dre) : '',
+    'Data Pagamento': f.data_pagamento ? fmtData(f.data_pagamento) : '',
+    Categoria: f.categoria || '',
+    Observações: f.observacoes || ''
+  }));
+  const ws = XLSX.utils.json_to_sheet(dados);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Faturas');
+  ws['!cols'] = [{wch:35},{wch:22},{wch:15},{wch:14},{wch:16},{wch:18},{wch:30}];
+  XLSX.writeFile(wb, `${prefixo}_${new Date().toISOString().split('T')[0]}.xlsx`);
+  showToast('✅ Excel baixado!');
+}
+
+// ===== COMPONENTE PRINCIPAL =====
+function App() {
+  const [aba, setAba] = useState('dre');
+  const [filtroCat, setFiltroCat] = useState('');
+  const [filtroStatus, setFiltroStatus] = useState('');
+  const [busca, setBusca] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [editando, setEditando] = useState(null);
+  const [saldoInput, setSaldoInput] = useState(DB.saldoCaixa || '');
+  const [mesDRE, setMesDRE] = useState('');
+  const [mesCaixa, setMesCaixa] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+  const [clientId, setClientId] = useState('');
+  const [showConfig, setShowConfig] = useState(false);
+  const [lendoIA, setLendoIA] = useState(false);
+  const [anexos, setAnexos] = useState([]);
+  const fileInputRef = useRef(null);
+
+  const [form, setForm] = useState({
+    nome: '', fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
+    categoria: '', status: 'Pendente', observacoes: '', arquivo_nome: '', arquivo_anexado: null
+  });
+
+  const faturas = DB.faturas || [];
+
+  // Persistir saldo
+  useEffect(() => {
+    const v = parseFloat(saldoInput);
+    if (!isNaN(v) && v !== DB.saldoCaixa) {
+      DB.saldoCaixa = v;
+      saveData(DB);
+    }
+  }, [saldoInput]);
+
+  const resetForm = () => setForm({
+    nome: '', fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
+    categoria: '', status: 'Pendente', observacoes: '', arquivo_nome: '', arquivo_anexado: null
+  });
+
+  // ===== LEITURA DE PDF COM IA =====
+  const lerPDFcomIA = async (arquivo) => {
+    setLendoIA(true);
+    try {
+      // Extrair texto do PDF via FileReader
+      const text = await arquivo.text();
+      const nomeArquivo = arquivo.name;
+      const nomeLimpo = nomeArquivo.replace(/\.(pdf|xlsx|xls|csv|png|jpg|jpeg)$/i,'');
+      const partes = nomeLimpo.split(/[-_]/);
+      
+      // Identificar fornecedor pelo nome do arquivo
+      let fornecedorSugerido = '';
+      const txtLower = nomeLimpo.toLowerCase();
+      
+      if (txtLower.includes('meta') || txtLower.includes('facebook')) fornecedorSugerido = 'Meta Ads (Facebook)';
+      else if (txtLower.includes('adplay')) fornecedorSugerido = 'ADSPLAY Mídia';
+      else if (txtLower.includes('plugni') || txtLower.includes('apostou') && txtLower.includes('2506')) fornecedorSugerido = 'Plugni Tecnologia';
+      else if (txtLower.includes('telesign') || txtLower.includes('betbr')) fornecedorSugerido = 'Telesign do Brasil';
+      else if (txtLower.includes('slack')) fornecedorSugerido = 'Slack';
+      else if (txtLower.includes('clickup')) fornecedorSugerido = 'ClickUp';
+      else if (txtLower.includes('ifood')) fornecedorSugerido = 'iFood Benefícios';
+      else if (txtLower.includes('lvt') || txtLower.includes('viagens') && txtLower.includes('nfs')) fornecedorSugerido = 'Bruno Best Travel (LVT Viagens)';
+      else if (partes.length >= 2) fornecedorSugerido = partes.slice(0, Math.min(2, partes.length-1)).join(' ').trim();
+      
+      // Tentar extrair valor do texto do PDF
+      let valorExtraido = '';
+      if (text) {
+        const valorMatch = text.match(/R\$\s*([\d.,]+)/);
+        if (valorMatch) {
+          let v = valorMatch[1].replace(/\./g,'').replace(',','.');
+          if (!isNaN(parseFloat(v))) valorExtraido = parseFloat(v).toString();
+        }
+        // Tentar data de vencimento
+        const dataMatch = text.match(/(\d{2}\/\d{2}\/\d{4})/);
+        if (dataMatch) {
+          const partesData = dataMatch[1].split('/');
+          // Usar como data_pagamento
+        }
+      }
+      
+      const catSugerida = sugerirCategoria(nomeLimpo, fornecedorSugerido);
+      const hoje = new Date().toISOString().split('T')[0];
+      
+      // Determinar mês de competência pelo nome
+      let mesCompetencia = hoje;
+      const mesMatch = nomeLimpo.match(/(\w{3,4})(?:\/|_|-|de\s)?(\d{4})/i);
+      if (mesMatch) {
+        const mesesMap = {jan:'01',fev:'02',mar:'03',abr:'04',mai:'05',jun:'06',jul:'07',ago:'08',set:'09',out:'10',nov:'11',dez:'12',
+                         janeiro:'01',fevereiro:'02',março:'03',abril:'04',maio:'05',junho:'06',julho:'07',agosto:'08',setembro:'09',outubro:'10',novembro:'11',dezembro:'12',
+                         january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',july:'07',august:'08',september:'09',october:'10',november:'11',december:'12'};
+        const mesTxt = mesMatch[1].toLowerCase().substring(0,3);
+        const ano = mesMatch[2];
+        if (mesesMap[mesTxt]) {
+          mesCompetencia = ano + '-' + mesesMap[mesTxt] + '-01';
+        }
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const base64 = e.target.result.split(',')[1];
+        setForm({
+          ...form,
+          arquivo_nome: nomeArquivo,
+          arquivo_anexado: { name: nomeArquivo, base64 },
+          nome: nomeLimpo,
+          fornecedor: fornecedorSugerido,
+          categoria: catSugerida,
+          valor: valorExtraido || '',
+          data_dre: mesCompetencia,
+          data_pagamento: '',
+          status: 'Pendente',
+          observacoes: `Extraído automaticamente de: ${nomeArquivo}`
+        });
+        setShowForm(true);
+        showToast('📄 IA leu "' + nomeArquivo + '"!');
+        setLendoIA(false);
+      };
+      reader.readAsDataURL(arquivo);
+      
+    } catch(e) {
+      // Fallback: só preencher pelo nome do arquivo
+      const nomeArquivo = arquivo.name;
+      const nomeLimpo = nomeArquivo.replace(/\.(pdf|xlsx|xls|csv|png|jpg|jpeg)$/i,'');
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const base64 = e.target.result.split(',')[1];
+        setForm({
+          ...form,
+          arquivo_nome: nomeArquivo,
+          arquivo_anexado: { name: nomeArquivo, base64 },
+          nome: nomeLimpo,
+          fornecedor: '',
+          categoria: sugerirCategoria(nomeLimpo, ''),
+          valor: '',
+          data_dre: new Date().toISOString().split('T')[0],
+          data_pagamento: '',
+          observacoes: `Anexado: ${nomeArquivo}`
+        });
+        setShowForm(true);
+        setLendoIA(false);
+        showToast('📄 Arquivo lido! Preencha os dados manualmente');
+      };
+      reader.readAsDataURL(arquivo);
+    }
+  };
+
+  // ===== HANDLE DROP =====
+  const handleDrop = (files) => {
+    setDragOver(false);
+    if (!files || files.length === 0) return;
+    
+    const file = files[0];
+    const novoAnexo = { name: file.name, size: file.size, tipo: file.type };
+    setAnexos(prev => [novoAnexo, ...prev].slice(0, 20));
+    
+    // Tentar ler com IA
+    lerPDFcomIA(file);
+  };
+
+  // ===== SALVAR FATURA =====
+  const salvarFatura = async () => {
+    if (!form.nome || !form.valor) {
+      showToast('⚠️ Preencha nome e valor', 'error');
+      return;
+    }
+    
+    const fatura = {
+      id: editando ? editando.id : gerarId(),
+      nome: form.nome,
+      fornecedor: form.fornecedor,
+      valor: parseFloat(form.valor) || 0,
+      data_dre: form.data_dre || new Date().toISOString().split('T')[0],
+      data_pagamento: form.data_pagamento || '',
+      categoria: form.categoria || 'Nao categorizado',
+      status: form.status || 'Pendente',
+      observacoes: form.observacoes || '',
+      arquivo_nome: form.arquivo_nome || '',
+      arquivo_anexado: form.arquivo_anexado || null,
+      criado_em: new Date().toISOString()
     };
 
-    const editar = (item) => {
-      setForm({ nome:item.nome||'', fornecedor:item.fornecedor||'', valor:String(item.valor||''), data_dre:item.data_dre||'', data_pagamento:item.data_pagamento||'', categoria:item.categoria||'', status:item.status||'Pendente', observacoes:item.observacoes||'' });
-      setEdit(item); setShowForm(true);
-    };
+    if (editando) {
+      const idx = DB.faturas.findIndex(f => f.id === editando.id);
+      if (idx >= 0) DB.faturas[idx] = fatura;
+      showToast('✅ Fatura atualizada!');
+      setEditando(null);
+    } else {
+      DB.faturas.push(fatura);
+      showToast('✅ Fatura cadastrada!');
+      
+      // Tentar salvar no Drive
+      if (clientId && gisInited) {
+        await salvarNoDrive(fatura, clientId);
+      }
+    }
+    saveData(DB);
+    resetForm();
+    setShowForm(false);
+    
+    // Forçar re-render
+    const evt = new Event('storage');
+    window.dispatchEvent(evt);
+  };
 
-    const excluir = (item) => { if (!confirm('Excluir "'+item.nome+'"?')) return; sv(f.filter(x => x.id !== item.id)); tost('🗑️ Excluída'); };
-
-    const toggleSt = (item) => {
-      const idx = ST.indexOf(item.status);
-      sv(f.map(x => x.id === item.id ? {...x, status: ST[(idx+1)%ST.length]} : x));
-    };
-
-    const exportXLS = (rows, pre) => {
-      if (!rows.length) { tost('⚠️ Nenhum dado'); return; }
-      const ws = XLSX.utils.json_to_sheet(rows.map(x => ({'Fatura':x.nome,'Fornecedor':x.fornecedor,'Valor R$':x.valor,'Data DRE':fmtD(x.data_dre),'Data Pagto':fmtD(x.data_pagamento),'Categoria':x.categoria,'Status':x.status})));
-      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Faturas');
-      XLSX.writeFile(wb, pre+'_'+new Date().toISOString().split('T')[0]+'.xlsx');
-      tost('✅ Excel baixado!');
-    };
-
-    // Dados filtrados
-    const mesesD = [...new Set(f.filter(x=>x.data_dre).map(x=>x.data_dre.substring(0,7)))].sort().reverse();
-    const mesesC = [...new Set(f.filter(x=>x.data_pagamento).map(x=>x.data_pagamento.substring(0,7)))].sort().reverse();
-
-    const fDRE = f.filter(x => {
-      if (fMes && (!x.data_dre || !x.data_dre.startsWith(fMes))) return false;
-      if (fCat && x.categoria !== fCat) return false;
-      if (busca) { const t = busca.toLowerCase(); if (!(x.nome||'').toLowerCase().includes(t) && !(x.fornecedor||'').toLowerCase().includes(t)) return false; }
-      return true;
+  const editar = (item) => {
+    setForm({
+      nome: item.nome || '',
+      arquivo_nome: item.arquivo_nome || '',
+      arquivo_anexado: item.arquivo_anexado || null,
+      fornecedor: item.fornecedor || '',
+      valor: String(item.valor || ''),
+      data_dre: item.data_dre || '',
+      data_pagamento: item.data_pagamento || '',
+      categoria: item.categoria || '',
+      status: item.status || 'Pendente',
+      observacoes: item.observacoes || ''
     });
+    setEditando(item);
+    setShowForm(true);
+  };
 
-    const fCx = f.filter(x => {
-      if (fMesC && (!x.data_pagamento || !x.data_pagamento.startsWith(fMesC))) return false;
-      if (fCat && x.categoria !== fCat) return false;
-      if (busca) { const t = busca.toLowerCase(); if (!(x.nome||'').toLowerCase().includes(t) && !(x.fornecedor||'').toLowerCase().includes(t)) return false; }
-      return true;
-    });
+  const excluir = (item) => {
+    if (!confirm(`Excluir "${item.nome}"?`)) return;
+    DB.faturas = DB.faturas.filter(f => f.id !== item.id);
+    saveData(DB);
+    showToast('🗑️ Excluída');
+    // Forçar re-render
+    const evt = new Event('storage');
+    window.dispatchEvent(evt);
+  };
 
-    const totDRE = fDRE.reduce((s,x) => s + (Number(x.valor)||0), 0);
+  const toggleStatus = (item) => {
+    const statusList = ['Pendente', 'Pago', 'Agendado', 'Vencido'];
+    const idx = statusList.indexOf(item.status);
+    const prox = statusList[(idx + 1) % statusList.length];
+    const f = DB.faturas.find(x => x.id === item.id);
+    if (f) { f.status = prox; saveData(DB); showToast(`Status: ${prox}`); }
+  };
 
-    // Caixa
-    const saldo = parseFloat(sal)||0;
-    const aPagar = f.filter(x => x.status==='Pendente'||x.status==='Vencido').reduce((s,x) => s + (Number(x.valor)||0), 0);
-    const saldoProj = saldo - aPagar;
-    const hoje = new Date();
-    const ordenado = f.filter(x => (x.status==='Pendente'||x.status==='Vencido') && x.data_pagamento).sort((a,b)=>(a.data_pagamento||'').localeCompare(b.data_pagamento||''));
-    const v7 = ordenado.filter(x => (new Date(x.data_pagamento+'T12:00:00')-hoje)/86400000 <= 7);
-    const v15 = ordenado.filter(x => (new Date(x.data_pagamento+'T12:00:00')-hoje)/86400000 <= 15);
-    const v30 = ordenado.filter(x => (new Date(x.data_pagamento+'T12:00:00')-hoje)/86400000 <= 30);
+  // Filtrar
+  const faturasFiltradas = faturas.filter(f => {
+    if (filtroCat && f.categoria !== filtroCat) return false;
+    if (filtroStatus && f.status !== filtroStatus) return false;
+    if (busca) {
+      const t = busca.toLowerCase();
+      if (!(f.nome||'').toLowerCase().includes(t) && !(f.fornecedor||'').toLowerCase().includes(t)) return false;
+    }
+    return true;
+  });
 
-    const ic = "w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent placeholder-slate-400";
-    const bc = "px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200";
+  // Meses disponiveis
+  const mesesDRE = [...new Set(faturas.map(f => f.data_dre ? f.data_dre.substring(0,7) : '').filter(Boolean))].sort().reverse();
+  const mesesCaixa = [...new Set(faturas.map(f => f.data_pagamento ? f.data_pagamento.substring(0,7) : '').filter(Boolean))].sort().reverse();
 
-    return (
-      <div className="space-y-4">
-        {toast && <div className="toast fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-xl bg-slate-800 text-white border border-slate-600">{toast}</div>}
+  // Filtro por mes
+  const faturasDRE = mesDRE ? faturasFiltradas.filter(f => f.data_dre && f.data_dre.startsWith(mesDRE)) : faturasFiltradas;
+  const faturasCaixa = mesCaixa ? faturasFiltradas.filter(f => f.data_pagamento && f.data_pagamento.startsWith(mesCaixa)) : faturasFiltradas;
 
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl md:text-2xl font-bold text-white"><span className="text-brand-400">Financial</span>S</h1>
-          <button onClick={() => { setForm({nome:'',fornecedor:'',valor:'',data_dre:'',data_pagamento:'',categoria:'',status:'Pendente',observacoes:''}); setEdit(null); setShowForm(true); }}
-            className="px-4 h-10 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-sm font-semibold">+ Nova Fatura</button>
+  // Metricas
+  const totalDRE = faturasDRE.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+  const totalPagoDRE = faturasDRE.filter(f => f.status === 'Pago').reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+  const totalPendenteDRE = faturasDRE.filter(f => f.status === 'Pendente' || f.status === 'Vencido').reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+
+  const saldoAtual = parseFloat(saldoInput) || 0;
+  const aPagarCaixa = faturasCaixa.filter(f => f.status === 'Pendente' || f.status === 'Vencido').reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+  const saldoProjetado = saldoAtual - aPagarCaixa;
+
+  // Proximos vencimentos
+  const hoje = new Date('2026-06-07T12:00:00');
+  const aPagarOrdenado = faturas.filter(f => (f.status === 'Pendente' || f.status === 'Vencido') && f.data_pagamento)
+    .sort((a,b) => (a.data_pagamento||'').localeCompare(b.data_pagamento||''));
+
+  const venc7d = aPagarOrdenado.filter(f => {
+    const diff = (new Date(f.data_pagamento+'T12:00:00') - hoje) / (1000*60*60*24);
+    return diff <= 7;
+  });
+  const total7d = venc7d.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+
+  // Render
+  return (
+    <div className="space-y-4 fade-in">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-xl md:text-2xl font-bold text-white">FinancialS</h1>
+          <p className="text-xs text-slate-400">Organizador Financeiro — DRE + Fluxo de Caixa</p>
         </div>
-
-        <div className="flex flex-wrap gap-2">
-          <input value={busca} onChange={e=>setBusca(e.target.value)} placeholder="Buscar..." className="flex-1 min-w-[150px] px-3 h-10 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500"/>
-          <select value={fCat} onChange={e=>setFCat(e.target.value)} className="px-3 h-10 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm">
-            <option value="">Todas</option>
-            {CATS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
-          </select>
+        <div className="flex gap-2">
+          <button onClick={() => setShowConfig(true)} className="px-3 py-1.5 rounded-lg text-xs bg-slate-700 text-slate-300 hover:bg-slate-600">⚙️</button>
+          <button onClick={() => setShowForm(true)} className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 hover:bg-brand-500">+ Nova Fatura</button>
         </div>
-
-        <div className="flex gap-1 bg-slate-800/50 rounded-lg p-1">
-          <button onClick={()=>setAba('dre')} className={'flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ' + (aba==='dre'?'bg-brand-600 text-white shadow-lg':'text-slate-400 hover:text-white')}>📊 DRE</button>
-          <button onClick={()=>setAba('caixa')} className={'flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ' + (aba==='caixa'?'bg-brand-600 text-white shadow-lg':'text-slate-400 hover:text-white')}>💰 Caixa</button>
-        </div>
-
-        {aba === 'dre' && <div className="space-y-4 fade-in">
-          <div className="flex flex-wrap gap-2 items-center">
-            <span className="text-xs text-slate-400 uppercase">Mês:</span>
-            <select value={fMes} onChange={e=>setFMes(e.target.value)} className="px-3 h-9 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm">
-              <option value="">Todos</option>
-              {mesesD.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
-            <button onClick={()=>exportXLS(fDRE,'dre')} className="ml-auto px-3 h-9 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm">⬇ Excel</button>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"><p className="text-xs text-slate-400 uppercase">Total DRE</p><p className="text-2xl font-bold text-white mt-1">{fmt(totDRE)}</p></div>
-            <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"><p className="text-xs text-slate-400 uppercase">Faturas</p><p className="text-2xl font-bold text-white mt-1">{fDRE.length}</p></div>
-            <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"><p className="text-xs text-slate-400 uppercase">Filtradas</p><p className="text-2xl font-bold text-white mt-1">{fDRE.length}</p></div>
-          </div>
-
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
-            <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-slate-900">
-                  <tr className="text-left text-slate-400 text-xs uppercase tracking-wider">
-                    <th className="p-3 font-medium">Fatura</th><th className="p-3 font-medium">Fornecedor</th>
-                    <th className="p-3 font-medium text-right">Valor</th><th className="p-3 font-medium">Data DRE</th>
-                    <th className="p-3 font-medium">Status</th><th className="p-3 font-medium">Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fDRE.map(x => <tr key={x.id} className="border-t border-slate-700/30 hover:bg-slate-700/20">
-                    <td className="p-3 text-white font-medium">{x.nome}</td>
-                    <td className="p-3 text-slate-300">{x.fornecedor||'—'}</td>
-                    <td className="p-3 text-right font-mono text-white">{fmt(x.valor)}</td>
-                    <td className="p-3 text-slate-300">{fmtD(x.data_dre)}</td>
-                    <td className="p-3"><button onClick={()=>toggleSt(x)} className="px-2 py-0.5 rounded text-xs font-medium" style={{backgroundColor:STC[x.status]+'20',color:STC[x.status]}}>{x.status}</button></td>
-                    <td className="p-3"><div className="flex gap-1"><button onClick={()=>editar(x)} className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs text-white">✏️</button><button onClick={()=>excluir(x)} className="px-2 py-1 rounded bg-red-900/50 hover:bg-red-800/50 text-xs text-red-400">🗑️</button></div></td>
-                  </tr>)}
-                  {fDRE.length===0 && <tr><td colSpan="6" className="p-8 text-center text-slate-500">Nenhuma fatura</td></tr>}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>}
-
-        {aba === 'caixa' && <div className="space-y-4 fade-in">
-          <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50">
-            <p className="text-xs text-slate-400 uppercase mb-2">Saldo Bancário</p>
-            <div className="flex gap-3 items-center">
-              <span className="text-lg text-slate-400">R$</span>
-              <input type="number" value={sal} onChange={e=>setSal(e.target.value)} className="flex-1 bg-transparent text-2xl font-bold text-white outline-none" placeholder="0,00"/>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"><p className="text-xs text-slate-400 uppercase">Saldo</p><p className="text-xl font-bold text-white mt-1">{fmt(saldo)}</p></div>
-            <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"><p className="text-xs text-slate-400 uppercase">A Pagar</p><p className="text-xl font-bold text-red-400 mt-1">{fmt(aPagar)}</p></div>
-            <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"><p className="text-xs text-slate-400 uppercase">Projetado</p><p className={'text-xl font-bold mt-1 '+(saldoProj>=0?'text-green-400':'text-red-400')}>{fmt(saldoProj)}</p></div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"><p className="text-xs text-slate-400 uppercase">7 dias</p><p className="text-lg font-bold text-orange-400 mt-1">{fmt(v7.reduce((s,x)=>s+Number(x.valor||0),0))}</p><p className="text-xs text-slate-500">{v7.length} fatura(s)</p></div>
-            <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"><p className="text-xs text-slate-400 uppercase">15 dias</p><p className="text-lg font-bold text-yellow-400 mt-1">{fmt(v15.reduce((s,x)=>s+Number(x.valor||0),0))}</p><p className="text-xs text-slate-500">{v15.length} fatura(s)</p></div>
-            <div className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"><p className="text-xs text-slate-400 uppercase">30 dias</p><p className="text-lg font-bold text-brand-400 mt-1">{fmt(v30.reduce((s,x)=>s+Number(x.valor||0),0))}</p><p className="text-xs text-slate-500">{v30.length} fatura(s)</p></div>
-          </div>
-
-          <div className="flex flex-wrap gap-2 items-center">
-            <span className="text-xs text-slate-400 uppercase">Mês:</span>
-            <select value={fMesC} onChange={e=>setFMesC(e.target.value)} className="px-3 h-9 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm">
-              <option value="">Todos</option>
-              {mesesC.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
-            <button onClick={()=>exportXLS(fCx,'caixa')} className="ml-auto px-3 h-9 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm">⬇ Excel</button>
-          </div>
-
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 overflow-hidden">
-            <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-slate-900">
-                  <tr className="text-left text-slate-400 text-xs uppercase tracking-wider">
-                    <th className="p-3 font-medium">Fatura</th><th className="p-3 font-medium">Fornecedor</th>
-                    <th className="p-3 font-medium text-right">Valor</th><th className="p-3 font-medium">Data Pagto</th>
-                    <th className="p-3 font-medium">Status</th><th className="p-3 font-medium">Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fCx.map(x => <tr key={x.id} className="border-t border-slate-700/30 hover:bg-slate-700/20">
-                    <td className="p-3 text-white font-medium">{x.nome}</td>
-                    <td className="p-3 text-slate-300">{x.fornecedor||'—'}</td>
-                    <td className="p-3 text-right font-mono text-white">{fmt(x.valor)}</td>
-                    <td className="p-3 text-slate-300">{fmtD(x.data_pagamento)}</td>
-                    <td className="p-3"><button onClick={()=>toggleSt(x)} className="px-2 py-0.5 rounded text-xs font-medium" style={{backgroundColor:STC[x.status]+'20',color:STC[x.status]}}>{x.status}</button></td>
-                    <td className="p-3"><div className="flex gap-1"><button onClick={()=>editar(x)} className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs text-white">✏️</button><button onClick={()=>excluir(x)} className="px-2 py-1 rounded bg-red-900/50 hover:bg-red-800/50 text-xs text-red-400">🗑️</button></div></td>
-                  </tr>)}
-                  {fCx.length===0 && <tr><td colSpan="6" className="p-8 text-center text-slate-500">Nenhuma fatura</td></tr>}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>}
-
-        {showForm && <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-40 p-4" onClick={()=>setShowForm(false)}>
-          <div className="bg-slate-800 rounded-2xl p-5 w-full max-w-lg border border-slate-600 shadow-2xl" onClick={e=>e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-white mb-4">{edit?'✏️ Editar':'📋 Nova'} Fatura</h2>
-            <div className="space-y-3">
-              <div><label className="text-xs text-slate-400 uppercase mb-1 block">Nome *</label><input value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})} className={ic} placeholder="Meta Ads - Maio/2026"/></div>
-              <div><label className="text-xs text-slate-400 uppercase mb-1 block">Fornecedor</label><input value={form.fornecedor} onChange={e=>setForm({...form,fornecedor:e.target.value})} className={ic} placeholder="Meta Ads"/></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs text-slate-400 uppercase mb-1 block">Valor (R$) *</label><input type="number" step="0.01" value={form.valor} onChange={e=>setForm({...form,valor:e.target.value})} className={ic} placeholder="0,00"/></div>
-                <div><label className="text-xs text-slate-400 uppercase mb-1 block">Categoria</label><select value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})} className={ic}><option value="">Selecione</option>{CATS.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}</select></div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs text-slate-400 uppercase mb-1 block">Data DRE</label><input type="date" value={form.data_dre} onChange={e=>setForm({...form,data_dre:e.target.value})} className={ic}/></div>
-                <div><label className="text-xs text-slate-400 uppercase mb-1 block">Data Pagto</label><input type="date" value={form.data_pagamento} onChange={e=>setForm({...form,data_pagamento:e.target.value})} className={ic}/></div>
-              </div>
-              <div><label className="text-xs text-slate-400 uppercase mb-1 block">Status</label><select value={form.status} onChange={e=>setForm({...form,status:e.target.value})} className={ic}>{ST.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
-              <div><label className="text-xs text-slate-400 uppercase mb-1 block">Obs</label><textarea value={form.observacoes} onChange={e=>setForm({...form,observacoes:e.target.value})} className={ic+' resize-none h-16'} placeholder="Observações..."/></div>
-              <div className="flex gap-3 pt-2">
-                <button onClick={()=>{setShowForm(false);setEdit(null)}} className={bc+' bg-slate-700 hover:bg-slate-600 text-white flex-1'}>Cancelar</button>
-                <button onClick={salvar} className={bc+' bg-brand-600 hover:bg-brand-500 text-white flex-1 font-semibold'}>{edit?'✏️ Atualizar':'💾 Salvar'}</button>
-              </div>
-            </div>
-          </div>
-        </div>}
       </div>
-    );
-  }
 
-  ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
-  </script>
+      {/* Config Modal */}
+      {showConfig && (
+        <div className="fixed inset-0 bg-black/60 z-40 flex items-center justify-center p-4" onClick={() => setShowConfig(false)}>
+          <div className="bg-slate-800 rounded-xl p-5 max-w-md w-full" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-bold mb-4">⚙️ Configurações</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400">Google Drive Client ID (opcional)</label>
+                <input value={clientId} onChange={e => setClientId(e.target.value)} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" placeholder="Seu Client ID..." />
+              </div>
+              {clientId && (
+                <button onClick={() => connectDrive(clientId)} className="w-full px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-500">🔗 Conectar Google Drive</button>
+              )}
+            </div>
+            <button onClick={() => setShowConfig(false)} className="w-full mt-4 px-4 py-2 rounded-lg text-sm bg-slate-700 hover:bg-slate-600">Fechar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Abas */}
+      <div className="flex gap-1 bg-slate-800 rounded-xl p-1">
+        {['dre', 'caixa'].map(a => (
+          <button key={a} onClick={() => { setAba(a); }} 
+            className={'flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition ' + (aba === a ? 'bg-brand-600 text-white shadow' : 'text-slate-400 hover:text-white')}>
+            {a === 'dre' ? '📋 DRE (Competência)' : '💰 Fluxo de Caixa'}
+          </button>
+        ))}
+      </div>
+
+      {/* Filtros */}
+      <div className="flex flex-wrap gap-2">
+        {aba === 'dre' && mesesDRE.length > 0 && (
+          <select value={mesDRE} onChange={e => setMesDRE(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-700 border border-slate-600 text-white text-xs">
+            <option value="">Todos os meses</option>
+            {mesesDRE.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        )}
+        {aba === 'caixa' && mesesCaixa.length > 0 && (
+          <select value={mesCaixa} onChange={e => setMesCaixa(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-700 border border-slate-600 text-white text-xs">
+            <option value="">Todos os meses</option>
+            {mesesCaixa.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        )}
+        <select value={filtroCat} onChange={e => setFiltroCat(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-700 border border-slate-600 text-white text-xs">
+          <option value="">Todas categorias</option>
+          {CATEGORIAS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
+        <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-700 border border-slate-600 text-white text-xs">
+          <option value="">Todos status</option>
+          <option value="Pendente">⏳ Pendente</option>
+          <option value="Pago">✅ Pago</option>
+          <option value="Vencido">🔴 Vencido</option>
+          <option value="Agendado">📅 Agendado</option>
+        </select>
+        <input value={busca} onChange={e => setBusca(e.target.value)} className="flex-1 min-w-[120px] px-3 py-1.5 rounded-lg bg-slate-700 border border-slate-600 text-white text-xs" placeholder="🔍 Buscar..." />
+      </div>
+
+      {/* Drop zone */}
+      <div 
+        className={'border-2 border-dashed rounded-xl p-6 text-center transition ' + (dragOver ? 'drag-over border-brand-500' : 'border-slate-600')}
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={e => { e.preventDefault(); handleDrop(e.dataTransfer.files); }}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <input ref={fileInputRef} type="file" accept=".pdf,.csv,.xlsx,.xls,.png,.jpg" className="hidden" onChange={e => handleDrop(e.target.files)} />
+        <p className="text-slate-400 text-sm">📎 Arraste a fatura aqui ou clique para anexar</p>
+        <p className="text-slate-600 text-xs mt-1">PDF, CSV, Excel, Imagem — IA extrai automaticamente</p>
+      </div>
+
+      {/* Form Modal */}
+      {showForm && (
+        <div className="fixed inset-0 bg-black/60 z-30 flex items-start justify-center p-4 pt-10 overflow-auto" onClick={() => !editando && resetForm()}>
+          <div className="bg-slate-800 rounded-xl p-5 max-w-lg w-full" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-bold mb-4">{editando ? '✏️ Editar Fatura' : '📄 Nova Fatura'}</h2>
+            {form.arquivo_nome && (
+              <div className="px-3 py-2 bg-slate-700 rounded-lg text-xs text-slate-300 mb-3">📎 {form.arquivo_nome}</div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Nome da Fatura *</label>
+                <input value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" placeholder="Ex: Meta Ads - Maio/2026" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Fornecedor</label>
+                <input value={form.fornecedor} onChange={e => setForm({...form, fornecedor: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" placeholder="Ex: Meta Ads" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Valor (R$) *</label>
+                <input type="number" step="0.01" value={form.valor} onChange={e => setForm({...form, valor: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" placeholder="0,00" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Data DRE (Competência)</label>
+                <input type="date" value={form.data_dre} onChange={e => setForm({...form, data_dre: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Data Pagamento Prevista</label>
+                <input type="date" value={form.data_pagamento} onChange={e => setForm({...form, data_pagamento: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Categoria</label>
+                <select value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1">
+                  <option value="">Selecione...</option>
+                  {CATEGORIAS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Status</label>
+                <select value={form.status} onChange={e => setForm({...form, status: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1">
+                  <option value="Pendente">⏳ Pendente</option>
+                  <option value="Pago">✅ Pago</option>
+                  <option value="Vencido">🔴 Vencido</option>
+                  <option value="Agendado">📅 Agendado</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Observações</label>
+                <textarea value={form.observacoes} onChange={e => setForm({...form, observacoes: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" rows="2" />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button onClick={salvarFatura} className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium bg-brand-600 hover:bg-brand-500">{editando ? 'Atualizar' : 'Salvar Fatura'}</button>
+              <button onClick={() => { resetForm(); setShowForm(false); setEditando(null); }} className="px-4 py-2.5 rounded-lg text-sm bg-slate-700 hover:bg-slate-600">Cancelar</button>
+            </div>
+            {lendoIA && <p className="text-brand-400 text-xs mt-2 animate-pulse">🤖 IA lendo o documento...</p>}
+          </div>
+        </div>
+      )}
+
+      {/* ABAS DE CONTEUDO */}
+      {aba === 'dre' && (
+        <div className="space-y-3">
+          {/* KPI Cards DRE */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-slate-800 rounded-xl p-4">
+              <p className="text-xs text-slate-400">Total DRE ({mesDRE || 'geral'})</p>
+              <p className="text-2xl font-bold text-white">{fmt(totalDRE)}</p>
+            </div>
+            <div className="bg-slate-800 rounded-xl p-4">
+              <p className="text-xs text-slate-400">Pago</p>
+              <p className="text-2xl font-bold text-green-400">{fmt(totalPagoDRE)}</p>
+            </div>
+            <div className="bg-slate-800 rounded-xl p-4">
+              <p className="text-xs text-slate-400">Pendente</p>
+              <p className="text-2xl font-bold text-yellow-400">{fmt(totalPendenteDRE)}</p>
+            </div>
+          </div>
+
+          {/* Tabela DRE */}
+          <div className="bg-slate-800 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 flex justify-between items-center border-b border-slate-700">
+              <p className="text-sm font-medium">Faturas DRE ({faturasDRE.length})</p>
+              <button onClick={() => exportarExcel(faturasDRE, 'dre')} className="px-3 py-1.5 rounded-lg text-xs bg-green-700 hover:bg-green-600">📥 Excel</button>
+            </div>
+            {faturasDRE.length === 0 ? (
+              <div className="p-8 text-center text-slate-500 text-sm">Nenhuma fatura encontrada. Arraste um PDF acima!</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-slate-400 text-xs border-b border-slate-700">
+                      <th className="p-3">Fatura</th>
+                      <th className="p-3">Fornecedor</th>
+                      <th className="p-3 text-right">Valor</th>
+                      <th className="p-3">Data DRE</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {faturasDRE.map(f => (
+                      <tr key={f.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                        <td className="p-3 text-white font-medium">{f.nome}</td>
+                        <td className="p-3 text-slate-300">{f.fornecedor}</td>
+                        <td className="p-3 text-right font-mono text-white">{fmt(f.valor)}</td>
+                        <td className="p-3 text-slate-300">{fmtData(f.data_dre)}</td>
+                        <td className="p-3">
+                          <button onClick={() => toggleStatus(f)} className={'px-2 py-0.5 rounded text-xs font-medium ' + 
+                            (f.status === 'Pago' ? 'bg-green-900 text-green-300' : 
+                             f.status === 'Vencido' ? 'bg-red-900 text-red-300' :
+                             f.status === 'Agendado' ? 'bg-blue-900 text-blue-300' : 'bg-yellow-900 text-yellow-300')}>
+                            {f.status}
+                          </button>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex gap-1">
+                            <button onClick={() => editar(f)} className="px-2 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600">✏️</button>
+                            <button onClick={() => excluir(f)} className="px-2 py-1 rounded text-xs bg-red-900 hover:bg-red-800">🗑️</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {aba === 'caixa' && (
+        <div className="space-y-3">
+          {/* KPI Cards Caixa */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-slate-800 rounded-xl p-4">
+              <p className="text-xs text-slate-400">Saldo Atual</p>
+              <input type="number" value={saldoInput} onChange={e => setSaldoInput(e.target.value)} className="text-2xl font-bold text-white bg-transparent w-full outline-none" placeholder="0" />
+            </div>
+            <div className="bg-slate-800 rounded-xl p-4">
+              <p className="text-xs text-slate-400">A Pagar</p>
+              <p className="text-2xl font-bold text-red-400">{fmt(aPagarCaixa)}</p>
+            </div>
+            <div className="bg-slate-800 rounded-xl p-4">
+              <p className="text-xs text-slate-400">Saldo Projetado</p>
+              <p className={'text-2xl font-bold ' + (saldoProjetado >= 0 ? 'text-green-400' : 'text-red-400')}>{fmt(saldoProjetado)}</p>
+            </div>
+          </div>
+
+          {/* Alerta vencimentos */}
+          {venc7d.length > 0 && (
+            <div className="bg-yellow-900/40 border border-yellow-700 rounded-xl p-4">
+              <p className="text-sm font-medium text-yellow-300">⚠️ {venc7d.length} fatura(s) vencem nos próximos 7 dias — total {fmt(total7d)}</p>
+            </div>
+          )}
+          {saldoProjetado < 0 && (
+            <div className="bg-red-900/40 border border-red-700 rounded-xl p-4">
+              <p className="text-sm font-medium text-red-300">🔴 Saldo projetado negativo! Ajuste o saldo ou renegocie prazos.</p>
+            </div>
+          )}
+
+          {/* Timeline vencimentos */}
+          {aPagarOrdenado.length > 0 && (
+            <div className="bg-slate-800 rounded-xl p-4">
+              <div className="flex justify-between items-center mb-3">
+                <p className="text-sm font-medium">📅 Linha do Tempo de Pagamentos</p>
+                <button onClick={() => exportarExcel(aPagarOrdenado, 'fluxo_caixa')} className="px-3 py-1.5 rounded-lg text-xs bg-green-700 hover:bg-green-600">📥 Excel</button>
+              </div>
+              <div className="space-y-1 max-h-60 overflow-y-auto scrollbar-thin">
+                {aPagarOrdenado.map(f => {
+                  const diff = Math.ceil((new Date(f.data_pagamento+'T12:00:00') - hoje) / (1000*60*60*24));
+                  const cor = diff <= 7 ? 'text-red-400' : diff <= 15 ? 'text-yellow-400' : 'text-slate-300';
+                  return (
+                    <div key={f.id} className="flex justify-between items-center px-3 py-2 bg-slate-700/50 rounded-lg text-sm">
+                      <div className="flex-1">
+                        <span className="text-white">{f.nome}</span>
+                        <span className="text-slate-500 ml-2 text-xs">{f.fornecedor}</span>
+                      </div>
+                      <span className={'font-mono mx-3 ' + cor}>{fmt(f.valor)}</span>
+                      <span className={'text-xs ' + cor}>{fmtData(f.data_pagamento)} {diff <= 0 ? '(vencida)' : `(em ${diff}d)`}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Tabela Caixa */}
+          <div className="bg-slate-800 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-700">
+              <p className="text-sm font-medium">Faturas ({faturasCaixa.length})</p>
+            </div>
+            {faturasCaixa.length === 0 ? (
+              <div className="p-8 text-center text-slate-500 text-sm">Nenhuma fatura para o período selecionado</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-slate-400 text-xs border-b border-slate-700">
+                      <th className="p-3">Fatura</th>
+                      <th className="p-3">Fornecedor</th>
+                      <th className="p-3 text-right">Valor</th>
+                      <th className="p-3">Pagamento</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {faturasCaixa.map(f => (
+                      <tr key={f.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                        <td className="p-3 text-white font-medium">{f.nome}</td>
+                        <td className="p-3 text-slate-300">{f.fornecedor}</td>
+                        <td className="p-3 text-right font-mono text-white">{fmt(f.valor)}</td>
+                        <td className="p-3 text-slate-300">{fmtData(f.data_pagamento)}</td>
+                        <td className="p-3">
+                          <button onClick={() => toggleStatus(f)} className={'px-2 py-0.5 rounded text-xs font-medium ' + 
+                            (f.status === 'Pago' ? 'bg-green-900 text-green-300' : 
+                             f.status === 'Vencido' ? 'bg-red-900 text-red-300' :
+                             f.status === 'Agendado' ? 'bg-blue-900 text-blue-300' : 'bg-yellow-900 text-yellow-300')}>
+                            {f.status}
+                          </button>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex gap-1">
+                            <button onClick={() => editar(f)} className="px-2 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600">✏️</button>
+                            <button onClick={() => excluir(f)} className="px-2 py-1 rounded text-xs bg-red-900 hover:bg-red-800">🗑️</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Footer */}
+      <div className="text-center text-xs text-slate-600 pt-4 pb-2">
+        FinancialS v4 • {faturas.length} faturas cadastradas • {faturas.filter(f => f.status === 'Pago').length} pagas • Dados salvos no navegador
+      </div>
+    </div>
+  );
+}
+
+// ===== RENDER =====
+const root = ReactDOM.createRoot(document.getElementById('app'));
+root.render(React.createElement(App));
+</script>
 </body>
 </html>
