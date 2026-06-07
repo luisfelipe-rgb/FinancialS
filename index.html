@@ -261,6 +261,45 @@ function base64ToBlob(base64, mimeType) {
   return new Blob([arr], { type: mimeType || 'application/octet-stream' });
 }
 
+async function deleteDriveFile(token, fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+    method: 'DELETE',
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  if (!res.ok && res.status !== 404) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.error?.message || `HTTP ${res.status}`);
+  }
+}
+
+async function updateDriveFile(token, fileId, { newName, addParent, removeParent } = {}) {
+  const params = new URLSearchParams();
+  params.set('fields', 'id,webViewLink,name,parents');
+  if (addParent) params.set('addParents', addParent);
+  if (removeParent) params.set('removeParents', removeParent);
+  const body = {};
+  if (newName) body.name = newName;
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?${params}`, {
+    method: 'PATCH',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!data.id) throw new Error(data?.error?.message || 'Falha ao atualizar arquivo');
+  return data;
+}
+
+function monthSubfolderName(dataIso) {
+  const [year, month] = (dataIso || '').split('-');
+  if (!year || !month) return '';
+  return `${month}_${year}`;
+}
+
+function driveFileNameFor(fatura) {
+  const ext = (fatura.arquivo_anexado?.name?.split('.').pop() || fatura.arquivo_nome?.split('.').pop() || 'pdf').toLowerCase();
+  return `${fatura.nome || 'fatura'}.${ext}`.replace(/[/\\:*?"<>|]/g, '_');
+}
+
 async function uploadFileToDrive(token, folderId, fileName, blob) {
   const metadata = { name: fileName, parents: [folderId] };
   const form = new FormData();
@@ -279,16 +318,32 @@ async function uploadFileToDrive(token, folderId, fileName, blob) {
 async function salvarFaturaNoDrive(clientId, fatura, sharedFolderId) {
   const token = await getDriveToken(clientId);
   const dataDre = fatura.data_dre || new Date().toISOString().split('T')[0];
-  const [ano, mes] = dataDre.split('-');
-  const mesSub = `${mes}_${ano}`;
+  const mesSub = monthSubfolderName(dataDre);
   const folderId = await ensureDriveFolder(token, mesSub, sharedFolderId);
   const anexo = fatura.arquivo_anexado;
   if (!anexo?.base64) throw new Error('Arquivo não anexado');
-  const ext = (anexo.name?.split('.').pop() || 'pdf').toLowerCase();
-  const nomeArquivo = `${fatura.nome || 'fatura'}.${ext}`.replace(/[/\\:*?"<>|]/g, '_');
+  const nomeArquivo = driveFileNameFor(fatura);
   const blob = base64ToBlob(anexo.base64, anexo.mimeType);
   const result = await uploadFileToDrive(token, folderId, nomeArquivo, blob);
   return { ...result, folder: mesSub };
+}
+
+async function sincronizarFaturaNoDrive(clientId, novaFatura, faturaAntiga, sharedFolderId) {
+  const novoNome = driveFileNameFor(novaFatura);
+  const antigoNome = driveFileNameFor(faturaAntiga);
+  const novoMes = monthSubfolderName(novaFatura.data_dre);
+  const antigoMes = monthSubfolderName(faturaAntiga.data_dre);
+  const precisaRenomear = novoNome !== antigoNome;
+  const precisaMover = novoMes !== antigoMes;
+  if (!precisaRenomear && !precisaMover) return null;
+  const token = await getDriveToken(clientId);
+  const opts = {};
+  if (precisaRenomear) opts.newName = novoNome;
+  if (precisaMover) {
+    opts.addParent = await ensureDriveFolder(token, novoMes, sharedFolderId);
+    opts.removeParent = await ensureDriveFolder(token, antigoMes, sharedFolderId);
+  }
+  return await updateDriveFile(token, novaFatura.drive_file_id, opts);
 }
 
 // ===== EXPORT EXCEL =====
@@ -716,6 +771,19 @@ function App() {
     }
 
     if (editando) {
+      if (fatura.drive_file_id && driveConnected) {
+        setSalvandoDrive(true);
+        try {
+          const sync = await sincronizarFaturaNoDrive(clientId, fatura, editando, sharedFolderId);
+          if (sync) {
+            fatura.drive_link = sync.webViewLink || fatura.drive_link;
+            showToast('☁️ Drive atualizado: ' + sync.name);
+          }
+        } catch (e) {
+          showToast('⚠️ Sync Drive falhou: ' + (e.message || ''), 'error');
+        }
+        setSalvandoDrive(false);
+      }
       const idx = DB.faturas.findIndex(f => f.id === editando.id);
       if (idx >= 0) DB.faturas[idx] = fatura;
       showToast('✅ Fatura atualizada!');
@@ -748,11 +816,25 @@ function App() {
     setShowForm(true);
   };
 
-  const excluir = (item) => {
-    if (!confirm(`Excluir "${item.nome}"?`)) return;
+  const excluir = async (item) => {
+    const temDrive = item.drive_file_id && driveConnected;
+    const msg = temDrive
+      ? `Excluir "${item.nome}"?\n\n⚠️ O arquivo também será apagado do Google Drive.`
+      : `Excluir "${item.nome}"?`;
+    if (!confirm(msg)) return;
+    if (temDrive) {
+      try {
+        const token = await getDriveToken(clientId);
+        await deleteDriveFile(token, item.drive_file_id);
+        showToast('🗑️ Excluída (local + Drive)');
+      } catch (e) {
+        showToast('⚠️ Apagada local — Drive falhou: ' + (e.message || ''), 'error');
+      }
+    } else {
+      showToast('🗑️ Excluída');
+    }
     DB.faturas = DB.faturas.filter(f => f.id !== item.id);
     saveData(DB);
-    showToast('🗑️ Excluída');
     refresh();
   };
 
