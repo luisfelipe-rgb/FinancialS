@@ -160,12 +160,19 @@ function showToast(msg, tipo = 'success') {
 
 // ===== GOOGLE DRIVE =====
 const DEFAULT_CLIENT_ID = '685757864448-91bgfjui854sc0g3jj4tsnsh9qpg889c.apps.googleusercontent.com';
-const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const DEFAULT_SHARED_FOLDER_ID = ''; // cole aqui o ID da pasta compartilhada para embutir no app
+const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive';
 const DRIVE_FOLDER_NAME = 'FinancialS';
+const SCOPE_VERSION = 'v2-drive'; // bump if scope changes, força re-auth
 let tokenClient = null;
 const folderIdCache = new Map();
 
 function getStoredToken() {
+  if (sessionStorage.getItem('drive_scope_version') !== SCOPE_VERSION) {
+    sessionStorage.removeItem('drive_token');
+    sessionStorage.setItem('drive_scope_version', SCOPE_VERSION);
+    return null;
+  }
   try {
     const raw = sessionStorage.getItem('drive_token');
     if (!raw) return null;
@@ -233,8 +240,8 @@ async function findOrCreateFolder(token, name, parentId) {
   return created.id;
 }
 
-async function ensureDriveFolder(token, subfolder) {
-  const rootId = await findOrCreateFolder(token, DRIVE_FOLDER_NAME, 'root');
+async function ensureDriveFolder(token, subfolder, sharedFolderId) {
+  const rootId = sharedFolderId || await findOrCreateFolder(token, DRIVE_FOLDER_NAME, 'root');
   if (!subfolder) return rootId;
   return await findOrCreateFolder(token, subfolder, rootId);
 }
@@ -261,10 +268,10 @@ async function uploadFileToDrive(token, folderId, fileName, blob) {
   return data;
 }
 
-async function salvarFaturaNoDrive(clientId, fatura) {
+async function salvarFaturaNoDrive(clientId, fatura, sharedFolderId) {
   const token = await getDriveToken(clientId);
   const mesSub = (fatura.data_dre || new Date().toISOString().split('T')[0]).substring(0, 7);
-  const folderId = await ensureDriveFolder(token, mesSub);
+  const folderId = await ensureDriveFolder(token, mesSub, sharedFolderId);
   const anexo = fatura.arquivo_anexado;
   if (!anexo?.base64) throw new Error('Arquivo não anexado');
   const ext = (anexo.name?.split('.').pop() || 'pdf').toLowerCase();
@@ -472,6 +479,7 @@ function App() {
   const [mesCaixa, setMesCaixa] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const [clientId, setClientId] = useState(() => localStorage.getItem('drive_client_id') || DEFAULT_CLIENT_ID);
+  const [sharedFolderId, setSharedFolderId] = useState(() => localStorage.getItem('drive_shared_folder_id') || DEFAULT_SHARED_FOLDER_ID);
   const [driveConnected, setDriveConnected] = useState(() => !!getStoredToken());
   const [salvarNoDriveCheck, setSalvarNoDriveCheck] = useState(true);
   const [showConfig, setShowConfig] = useState(false);
@@ -484,6 +492,12 @@ function App() {
     if (clientId) localStorage.setItem('drive_client_id', clientId);
     else localStorage.removeItem('drive_client_id');
   }, [clientId]);
+
+  useEffect(() => {
+    if (sharedFolderId) localStorage.setItem('drive_shared_folder_id', sharedFolderId);
+    else localStorage.removeItem('drive_shared_folder_id');
+    folderIdCache.clear();
+  }, [sharedFolderId]);
 
   const conectarDrive = async () => {
     if (!clientId) { showToast('⚠️ Configure o Client ID primeiro', 'error'); return; }
@@ -590,7 +604,7 @@ function App() {
     if (deveSalvarDrive) {
       setSalvandoDrive(true);
       try {
-        const result = await salvarFaturaNoDrive(clientId, fatura);
+        const result = await salvarFaturaNoDrive(clientId, fatura, sharedFolderId);
         fatura.drive_file_id = result.id;
         fatura.drive_link = result.webViewLink;
         showToast('☁️ Salvo no Drive: FinancialS/' + result.folder + '/' + result.name);
@@ -728,6 +742,11 @@ function App() {
                 <label className="text-xs text-slate-400">Client ID</label>
                 <input value={clientId} onChange={e => setClientId(e.target.value)} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1 font-mono" placeholder="xxxxx.apps.googleusercontent.com" />
               </div>
+              <div>
+                <label className="text-xs text-slate-400">ID da Pasta Compartilhada (opcional)</label>
+                <input value={sharedFolderId} onChange={e => setSharedFolderId(e.target.value.trim())} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1 font-mono" placeholder="1AbC...xyz (deixe vazio para usar o Drive pessoal)" />
+                <p className="text-xs text-slate-500 mt-1">Abra a pasta no Drive — o ID está na URL: <code className="bg-slate-900 px-1 rounded">drive.google.com/drive/folders/<b>ID</b></code>. Compartilhe a pasta com a equipe como <b>Editor</b>.</p>
+              </div>
               <div className="flex gap-2">
                 {!driveConnected ? (
                   <button onClick={conectarDrive} disabled={!clientId} className="flex-1 px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500">🔗 Conectar Drive</button>
@@ -736,7 +755,12 @@ function App() {
                 )}
               </div>
               {driveConnected && (
-                <p className="text-xs text-slate-400">Arquivos são salvos em <code className="bg-slate-900 px-1 rounded">FinancialS/YYYY-MM/</code> do seu Drive, organizados pelo mês de competência. A app só vê arquivos que ela mesma criou (scope <code>drive.file</code>).</p>
+                <p className="text-xs text-slate-400">
+                  {sharedFolderId
+                    ? <>Arquivos vão para a <b>pasta compartilhada</b>, organizados em subpastas <code className="bg-slate-900 px-1 rounded">YYYY-MM/</code> pelo mês de competência.</>
+                    : <>Arquivos vão para <code className="bg-slate-900 px-1 rounded">FinancialS/YYYY-MM/</code> no <b>seu Drive pessoal</b>. Configure uma Pasta Compartilhada acima para centralizar.</>
+                  }
+                </p>
               )}
             </div>
 
