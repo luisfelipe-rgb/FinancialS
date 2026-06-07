@@ -246,6 +246,14 @@ async function ensureDriveFolder(token, subfolder, sharedFolderId) {
   return await findOrCreateFolder(token, subfolder, rootId);
 }
 
+function parseFolderId(input) {
+  if (!input) return '';
+  const s = String(input).trim();
+  const m = s.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  return s.split('?')[0].split('/')[0].split('#')[0].trim();
+}
+
 function base64ToBlob(base64, mimeType) {
   const bytes = atob(base64);
   const arr = new Uint8Array(bytes.length);
@@ -481,7 +489,7 @@ function App() {
   const [mesCaixa, setMesCaixa] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const [clientId, setClientId] = useState(() => localStorage.getItem('drive_client_id') || DEFAULT_CLIENT_ID);
-  const [sharedFolderId, setSharedFolderId] = useState(() => localStorage.getItem('drive_shared_folder_id') || DEFAULT_SHARED_FOLDER_ID);
+  const [sharedFolderId, setSharedFolderId] = useState(() => parseFolderId(localStorage.getItem('drive_shared_folder_id') || DEFAULT_SHARED_FOLDER_ID));
   const [driveConnected, setDriveConnected] = useState(() => !!getStoredToken());
   const [salvarNoDriveCheck, setSalvarNoDriveCheck] = useState(true);
   const [showConfig, setShowConfig] = useState(false);
@@ -746,7 +754,7 @@ function App() {
               </div>
               <div>
                 <label className="text-xs text-slate-400">ID da Pasta Compartilhada (opcional)</label>
-                <input value={sharedFolderId} onChange={e => setSharedFolderId(e.target.value.trim())} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1 font-mono" placeholder="1AbC...xyz (deixe vazio para usar o Drive pessoal)" />
+                <input value={sharedFolderId} onChange={e => setSharedFolderId(parseFolderId(e.target.value))} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1 font-mono" placeholder="cole o ID ou a URL completa da pasta" />
                 <p className="text-xs text-slate-500 mt-1">Abra a pasta no Drive — o ID está na URL: <code className="bg-slate-900 px-1 rounded">drive.google.com/drive/folders/<b>ID</b></code>. Compartilhe a pasta com a equipe como <b>Editor</b>.</p>
               </div>
               <div className="flex gap-2">
