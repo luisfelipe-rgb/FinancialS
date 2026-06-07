@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FinancialS — Organizador Financeiro</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        brand: { 400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9' }
+      }
+    }
+  }
+}
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+* { font-family: 'Inter', sans-serif; }
+body { background: #0f172a; }
+input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
+.scrollbar-thin::-webkit-scrollbar { width: 4px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+.fade-in { animation: fadeIn 0.3s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.toast { animation: slideDown 0.3s ease-out; }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body class="text-white min-h-screen">
+  <div id="app" class="max-w-6xl mx-auto p-3 md:p-5 space-y-4"></div>
+  <script>
+  // === DATA STORE ===
+  const STORE_KEY = 'financials_v1';
+  
+  function loadData() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch(e) {}
+    return { faturas: [], saldoCaixa: 0, nomeEmpresa: '' };
+  }
+  
+  function saveData(data) {
+    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+  }
+
+  let DB = loadData();
+
+  // === HELPERS ===
+  const CATEGORIAS = [
+    { value: 'BPO', label: '📋 BPO', cor: '#818cf8' },
+    { value: 'Viagens', label: '✈️ Viagens', cor: '#34d399' },
+    { value: 'Provedores', label: '🔧 Provedores', cor: '#fbbf24' },
+    { value: 'Publicidade', label: '📢 Publicidade', cor: '#f472b6' },
+    { value: 'Nao categorizado', label: '❓ Outros', cor: '#94a3b8' }
+  ];
+
+  function sugerirCategoria(nome, fornecedor) {
+    const txt = ((fornecedor||'') + ' ' + (nome||'')).toLowerCase();
+    if (txt.includes('meta')||txt.includes('facebook')||txt.includes('ads')||txt.includes('adwords')||txt.includes('google ads')||txt.includes('publicidade')||txt.includes('tiktok')||txt.includes('adplay')) return 'Publicidade';
+    if (txt.includes('viagem')||txt.includes('hotel')||txt.includes('passagem')||txt.includes('uber')||txt.includes('traslado')||txt.includes('aeroporto')) return 'Viagens';
+    if (txt.includes('bpo')||txt.includes('gbarros')||txt.includes('serviços prestados')||txt.includes('terceiriz')||txt.includes('consultoria')||txt.includes('gb')) return 'BPO';
+    if (txt.includes('plugni')||txt.includes('telesign')||txt.includes('slack')||txt.includes('clickup')||txt.includes('aws')||txt.includes('azure')||txt.includes('cloud')||txt.includes('servidor')||txt.includes('sms')||txt.includes('provedor')||txt.includes('internet')) return 'Provedores';
+    return '';
+  }
+
+  function fmt(v) {
+    if (v === null || v === undefined || v === '') return 'R$ 0,00';
+    return 'R$ ' + parseFloat(v).toLocaleString('pt-BR', {minimumFractionDigits:2,maximumFractionDigits:2});
+  }
+
+  function fmtData(d) {
+    if (!d) return '—';
+    const p = d.split('-');
+    if (p.length !== 3) return d;
+    return `${p[2]}/${p[1]}/${p[0]}`;
+  }
+
+  function mesAno(d) {
+    if (!d) return '';
+    const p = d.split('-');
+    if (p.length !== 3) return d;
+    const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    return `${meses[parseInt(p[1])-1]}/${p[0]}`;
+  }
+
+  function gerarId() { return Date.now().toString(36) + Math.random().toString(36).substr(2,5); }
+
+  let toastTimer = null;
+  function showToast(msg, tipo = 'success') {
+    const el = document.getElementById('toast-container');
+    if (!el) return;
+    const div = document.createElement('div');
+    div.className = `toast px-4 py-3 rounded-xl shadow-xl text-sm font-medium ${tipo === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 text-white border border-slate-600'}`;
+    div.textContent = msg;
+    el.innerHTML = '';
+    el.appendChild(div);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.innerHTML = ''; }, 2500);
+  }
+
+  // === EXPORT EXCEL ===
+  function exportarExcel(linhas, prefixo) {
+    if (!linhas || linhas.length === 0) {
+      showToast('⚠️ Nenhum dado para exportar', 'error');
+      return;
+    }
+    const dados = linhas.map(f => ({
+      'Fatura': f.nome || '',
+      'Fornecedor': f.fornecedor || '',
+      'Valor (R$)': f.valor || 0,
+      'Data DRE': f.data_dre ? fmtData(f.data_dre) : '',
+      'Data Pagamento Prevista': f.data_pagamento ? fmtData(f.data_pagamento) : '',
+      'Categoria': f.categoria || '',
+      'Observações': f.observacoes || ''
+    }));
+    const ws = XLSX.utils.json_to_sheet(dados);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Faturas');
+    ws['!cols'] = [
+      {wch: 35}, {wch: 22}, {wch: 15}, {wch: 14}, {wch: 16}, {wch: 18}, {wch: 30}
+    ];
+    const nome = `${prefixo}_${new Date().toISOString().split('T')[0]}.xlsx`;
+    XLSX.writeFile(wb, nome);
+    showToast('✅ Excel baixado!');
+  }
+
+  // === EXTRAIR MESES UNICOS ===
+  function mesesUnicos(faturas, campo) {
+    const set = new Set();
+    faturas.forEach(f => {
+      if (f[campo]) set.add(f[campo].substring(0,7));
+    });
+    return Array.from(set).sort().reverse();
+  }
+
+  // === RENDER ===
+  function render() {
+    const app = document.getElementById('app');
+    if (!app) return;
+    
+    const [aba, setAba] = React.useState('dre');
+    const [filtroCat, setFiltroCat] = React.useState('');
+    const [busca, setBusca] = React.useState('');
+    const [showForm, setShowForm] = React.useState(false);
+    const [editando, setEditando] = React.useState(null);
+    const [saldoInput, setSaldoInput] = React.useState(DB.saldoCaixa || '');
+    const [mesDRE, setMesDRE] = React.useState('');
+    const [mesCaixa, setMesCaixa] = React.useState('');
+    const [dragOver, setDragOver] = React.useState(false);
+
+    const [form, setForm] = React.useState({
+      nome: '', fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
+      categoria: '', observacoes: '', arquivo_nome: ''
+    });
+
+    const faturas = DB.faturas || [];
+    
+    React.useEffect(() => {
+      const v = parseFloat(saldoInput);
+      if (!isNaN(v) && v !== DB.saldoCaixa) {
+        DB.saldoCaixa = v;
+        saveData(DB);
+      }
+    }, [saldoInput]);
+
+    const resetForm = () => setForm({
+      nome: '', fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
+      categoria: '', observacoes: '', arquivo_nome: ''
+    });
+
+    const handleFileDrop = (files) => {
+      const file = files[0];
+      if (!file) return;
+      const nomeArquivo = file.name;
+      const nomeLimpo = nomeArquivo.replace(/\.(pdf|xlsx|xls|csv|png|jpg|jpeg)$/i,'');
+      const partes = nomeLimpo.split(/[-_]/);
+      let fornecedorSugerido = '';
+      if (partes.length >= 2) {
+        fornecedorSugerido = partes.slice(0, Math.min(2, partes.length-1)).join(' ').trim();
+      }
+      const catSugerida = sugerirCategoria(nomeLimpo, fornecedorSugerido);
+      const hoje = new Date().toISOString().split('T')[0];
+      setForm({
+        ...form,
+        arquivo_nome: nomeArquivo,
+        nome: nomeLimpo,
+        fornecedor: fornecedorSugerido,
+        categoria: catSugerida,
+        valor: '',
+        data_dre: hoje,
+        data_pagamento: ''
+      });
+      setShowForm(true);
+      showToast(`📄 "${nomeArquivo}" lido!`);
+    };
+
+    const salvarFatura = () => {
+      if (!form.nome || !form.valor) {
+        showToast('⚠️ Preencha nome e valor', 'error');
+        return;
+      }
+      const fatura = {
+        id: editando ? editando.id : gerarId(),
+        nome: form.nome,
+        arquivo_nome: form.arquivo_nome,
+        fornecedor: form.fornecedor,
+        valor: parseFloat(form.valor) || 0,
+        data_dre: form.data_dre,
+        data_pagamento: form.data_pagamento,
+        categoria: form.categoria || 'Nao categorizado',
+        observacoes: form.observacoes,
+        criado_em: new Date().toISOString()
+      };
+
+      if (editando) {
+        const idx = DB.faturas.findIndex(f => f.id === editando.id);
+        if (idx >= 0) DB.faturas[idx] = fatura;
+        showToast('✅ Fatura atualizada!');
+        setEditando(null);
+      } else {
+        DB.faturas.push(fatura);
+        showToast('✅ Fatura cadastrada!');
+      }
+      saveData(DB);
+      resetForm();
+      setShowForm(false);
+      render();
+    };
+
+    const editar = (item) => {
+      setForm({
+        nome: item.nome || '',
+        arquivo_nome: item.arquivo_nome || '',
+        fornecedor: item.fornecedor || '',
+        valor: String(item.valor || ''),
+        data_dre: item.data_dre || '',
+        data_pagamento: item.data_pagamento || '',
+        categoria: item.categoria || '',
+        observacoes: item.observacoes || ''
+      });
+      setEditando(item);
+      setShowForm(true);
+    };
+
+    const excluir = (item) => {
+      if (!confirm(`Excluir "${item.nome}"?`)) return;
+      DB.faturas = DB.faturas.filter(f => f.id !== item.id);
+      saveData(DB);
+      showToast('🗑️ Excluída');
+      render();
+    };
+
+    // Meses disponiveis
+    const mesesDRE = mesesUnicos(faturas, 'data_dre');
+    const mesesCaixa = mesesUnicos(faturas, 'data_pagamento');
+
+    const faturasDREFiltradas = mesDRE
+      ? faturas.filter(f => f.data_dre && f.data_dre.startsWith(mesDRE))
+      : faturas;
+    const faturasCaixaFiltradas = mesCaixa
+      ? faturas.filter(f => f.data_pagamento && f.data_pagamento.startsWith(mesCaixa))
+      : faturas;
+
+    const faturasDRE = faturasDREFiltradas.filter(f => {
+      if (filtroCat && f.categoria !== filtroCat) return false;
+      if (busca) {
+        const t = busca.toLowerCase();
+        if (!(f.nome||'').toLowerCase().includes(t) && !(f.fornecedor||'').toLowerCase().includes(t)) return false;
+      }
+      return true;
+    });
+    const faturasCaixa = faturasCaixaFiltradas.filter(f => {
+      if (filtroCat && f.categoria !== filtroCat) return false;
+      if (busca) {
+        const t = busca.toLowerCase();
+        if (!(f.nome||'').toLowerCase().includes(t) && !(f.fornecedor||'').toLowerCase().includes(t)) return false;
+      }
+      return true;
+    });
+
+    // Métricas DRE
+    const totalDRE = faturasDRE.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+    const totalPagoDRE = faturasDRE.filter(f => f.status === 'Pago').reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+    const totalPendenteDRE = faturasDRE.filter(f => f.status !== 'Pago').reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+
+    // Métricas Caixa - só datas
+    const saldoAtual = parseFloat(saldoInput) || 0;
+    const aPagarCaixa = faturasCaixa.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+    const saldoProjetado = saldoAtual - aPagarCaixa;
+
+    // Proximos vencimentos
+    const hoje = new Date();
+    hoje.setHours(12,0,0,0);
+    const aPagarOrdenado = faturas
+      .filter(f => f.data_pagamento)
+      .sort((a,b) => (a.data_pagamento||'').localeCompare(b.data_pagamento||''));
+
+    const venc7d = aPagarOrdenado.filter(f => {
+      const diff = (new Date(f.data_pagamento+'T12:00:00') - hoje) / (1000*60*60*24);
+      return diff >= 0 && diff <= 7;
+    });
+    const venc15d = aPagarOrdenado.filter(f => {
+      const diff = (new Date(f.data_pagamento+'T12:00:00') - hoje) / (1000*60*60*24);
+      return diff >= 0 && diff <= 15;
+    });
+    const venc30d = aPagarOrdenado.filter(f => {
+      const diff = (new Date(f.data_pagamento+'T12:00:00') - hoje) / (1000*60*60*24);
+      return diff >= 0 && diff <= 30;
+    });
+    const vencidas = aPagarOrdenado.filter(f => {
+      const diff = (new Date(f.data_pagamento+'T12:00:00') - hoje) / (1000*60*60*24);
+      return diff < 0;
+    });
+
+    const total7d = venc7d.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+    const total15d = venc15d.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+    const total30d = venc30d.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+    const totalVencidas = vencidas.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+
+    // Agrupar DRE por mês
+    const meses = {};
+    faturas.forEach(f => {
+      const chave = f.data_dre ? f.data_dre.substring(0,7) : 'sem-data';
+      if (!meses[chave]) meses[chave] = { total: 0, cats: {}, faturas: [] };
+      const v = parseFloat(f.valor)||0;
+      meses[chave].total += v;
+      meses[chave].faturas.push(f);
+      const cat = f.categoria || 'Nao categorizado';
+      meses[chave].cats[cat] = (meses[chave].cats[cat]||0) + v;
+    });
+
+    const inputClass = "w-full px-3 py-2.5 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent placeholder-slate-400";
+    const labelClass = "text-xs font-medium text-slate-400 uppercase tracking-wider mb-1 block";
+    const btnClass = "px-4 py-2.5 rounded-lg text-sm font-medium transition-all active:scale-95";
+
+    return React.createElement('div', {className: 'space-y-4'},
+      // Toast
+      React.createElement('div', {id: 'toast-container', className: 'fixed top-4 right-4 z-50'}),
+
+      // Header
+      React.createElement('div', {className: 'flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3'},
+        React.createElement('div', null,
+          React.createElement('h1', {className: 'text-2xl font-bold flex items-center gap-2'}, '📊 FinancialS'),
+          React.createElement('p', {className: 'text-sm text-slate-400 mt-0.5'}, 'Organizador Financeiro — DRE + Fluxo de Caixa')
+        ),
+        React.createElement('div', {className: 'flex gap-2'},
+          React.createElement('button', {onClick: () => { resetForm(); setEditando(null); setShowForm(true); }, className: btnClass + ' bg-brand-600 hover:bg-brand-500 text-white flex items-center gap-1.5'},
+            React.createElement('span', {className: 'text-lg leading-none'}, '+'), ' Nova Fatura'
+          )
+        )
+      ),
+
+      // Abas
+      React.createElement('div', {className: 'flex gap-1 bg-slate-800 rounded-xl p-1 w-fit'},
+        [
+          {id:'dre', icone:'📊', label:'DRE (Competência)'},
+          {id:'caixa', icone:'💰', label:'Caixa (Fluxo)'}
+        ].map(a =>
+          React.createElement('button', {
+            key: a.id,
+            onClick: () => setAba(a.id),
+            className: `px-4 py-2 rounded-lg text-sm font-medium transition-all ${aba===a.id ? 'bg-brand-600 text-white shadow' : 'text-slate-400 hover:text-white'}`
+          }, a.icone + ' ' + a.label)
+        )
+      ),
+
+      // === ABA DRE ===
+      aba === 'dre' && React.createElement('div', {className: 'space-y-4'},
+        // Filtro mes DRE
+        mesesDRE.length > 0 && React.createElement('div', {className: 'flex flex-wrap gap-2 items-center'},
+          React.createElement('span', {className: 'text-sm text-slate-400'}, '📅 Mês DRE:'),
+          React.createElement('select', {
+            value: mesDRE,
+            onChange: e => setMesDRE(e.target.value),
+            className: 'px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm'
+          },
+            React.createElement('option', {value: ''}, 'Todos os meses'),
+            mesesDRE.map(m => React.createElement('option', {key: m, value: m}, m))
+          ),
+          mesDRE && React.createElement('button', {
+            onClick: () => setMesDRE(''),
+            className: 'px-2 py-1 text-xs rounded bg-slate-700 text-slate-300 hover:bg-slate-600'
+          }, '✕ Limpar')
+        ),
+
+        // Métricas DRE
+        React.createElement('div', {className: 'grid grid-cols-1 sm:grid-cols-3 gap-3'},
+          React.createElement('div', {className: 'bg-gradient-to-br from-brand-600 to-brand-800 rounded-xl p-4'},
+            React.createElement('div', {className: 'text-xs text-white/70'}, '📊 Total DRE'),
+            React.createElement('div', {className: 'text-xl font-bold mt-1'}, fmt(totalDRE))
+          ),
+          React.createElement('div', {className: 'bg-gradient-to-br from-green-600 to-green-800 rounded-xl p-4'},
+            React.createElement('div', {className: 'text-xs text-white/70'}, '📅 Faturas no período'),
+            React.createElement('div', {className: 'text-xl font-bold mt-1'}, faturasDRE.length.toString())
+          )
+        ),
+
+        // Tabela DRE
+        React.createElement('div', {className: 'bg-slate-800 rounded-xl p-4'},
+          React.createElement('div', {className: 'flex justify-between items-center mb-3'},
+            React.createElement('h3', {className: 'text-sm font-semibold text-slate-300'}, '📋 Faturas por Competência'),
+            faturasDRE.length > 0 && React.createElement('button', {
+              onClick: () => exportarExcel(faturasDRE, 'dre'),
+              className: 'px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs rounded-lg'
+            }, '📥 Excel')
+          ),
+          faturasDRE.length === 0
+            ? React.createElement('div', {className: 'text-center py-8 text-slate-500'}, 'Nenhuma fatura encontrada')
+            : React.createElement('div', {className: 'overflow-x-auto'},
+                React.createElement('table', {className: 'w-full text-sm'},
+                  React.createElement('thead', null,
+                    React.createElement('tr', {className: 'border-b border-slate-700 text-slate-400 text-xs uppercase'},
+                      React.createElement('th', {className: 'text-left p-2 font-medium'}, 'Fatura'),
+                      React.createElement('th', {className: 'text-left p-2 font-medium hidden md:table-cell'}, 'Fornecedor'),
+                      React.createElement('th', {className: 'text-right p-2 font-medium'}, 'Valor'),
+                      React.createElement('th', {className: 'text-left p-2 font-medium'}, 'Data DRE'),
+                      React.createElement('th', {className: 'text-left p-2 font-medium hidden md:table-cell'}, 'Pagto'),
+                      React.createElement('th', {className: 'text-center p-2 font-medium'}, 'Ações')
+                    )
+                  ),
+                  React.createElement('tbody', null,
+                    faturasDRE.map(f =>
+                      React.createElement('tr', {key: f.id, className: 'border-b border-slate-700/50 hover:bg-slate-700/30'},
+                        React.createElement('td', {className: 'p-2'}, React.createElement('div', {className: 'font-medium truncate max-w-[180px]'}, f.nome)),
+                        React.createElement('td', {className: 'p-2 hidden md:table-cell text-slate-300'}, f.fornecedor || '—'),
+                        React.createElement('td', {className: 'p-2 text-right font-mono font-semibold'}, fmt(f.valor)),
+                        React.createElement('td', {className: 'p-2 text-slate-300'}, f.data_dre ? fmtData(f.data_dre) : '—'),
+                        React.createElement('td', {className: 'p-2 hidden md:table-cell text-slate-300'}, f.data_pagamento ? fmtData(f.data_pagamento) : '—'),
+                        React.createElement('td', {className: 'p-2 text-center'},
+                          React.createElement('div', {className: 'flex justify-center gap-1'},
+                            React.createElement('button', {onClick: () => editar(f), className: 'p-1 rounded bg-slate-700 hover:bg-slate-600 text-xs', title: 'Editar'}, '✏️'),
+                            React.createElement('button', {onClick: () => excluir(f), className: 'p-1 rounded bg-slate-700 hover:bg-red-900/50 text-xs', title: 'Excluir'}, '🗑️')
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+        )
+      ),
+
+      // === ABA CAIXA ===
+      aba === 'caixa' && React.createElement('div', {className: 'space-y-4'},
+        // Filtro mes Caixa
+        mesesCaixa.length > 0 && React.createElement('div', {className: 'flex flex-wrap gap-2 items-center'},
+          React.createElement('span', {className: 'text-sm text-slate-400'}, '💳 Mês Pagamento:'),
+          React.createElement('select', {
+            value: mesCaixa,
+            onChange: e => setMesCaixa(e.target.value),
+            className: 'px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-white text-sm'
+          },
+            React.createElement('option', {value: ''}, 'Todos os meses'),
+            mesesCaixa.map(m => React.createElement('option', {key: m, value: m}, m))
+          ),
+          mesCaixa && React.createElement('button', {
+            onClick: () => setMesCaixa(''),
+            className: 'px-2 py-1 text-xs rounded bg-slate-700 text-slate-300 hover:bg-slate-600'
+          }, '✕ Limpar')
+        ),
+
+        // Saldo Input
+        React.createElement('div', {className: 'bg-gradient-to-br from-slate-700 to-slate-800 rounded-xl p-4'},
+          React.createElement('div', {className: 'grid grid-cols-1 sm:grid-cols-3 gap-4'},
+            React.createElement('div', null,
+              React.createElement('label', {className: 'text-xs text-slate-400 block mb-1'}, '💰 Saldo Atual (Banco)'),
+              React.createElement('input', {
+                type: 'number', step: '0.01',
+                value: saldoInput,
+                onChange: e => setSaldoInput(e.target.value),
+                placeholder: '0,00',
+                className: 'w-full px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-600 text-white text-lg font-bold text-right focus:outline-none focus:ring-2 focus:ring-brand-500'
+              })
+            ),
+            React.createElement('div', {className: 'flex flex-col justify-center'},
+              React.createElement('span', {className: 'text-xs text-slate-400'}, '💳 Total a Pagar'),
+              React.createElement('span', {className: 'text-xl font-bold text-amber-400'}, fmt(aPagarCaixa))
+            ),
+            React.createElement('div', {className: 'flex flex-col justify-center'},
+              React.createElement('span', {className: 'text-xs text-slate-400'}, '📊 Saldo Projetado'),
+              React.createElement('span', {
+                className: 'text-xl font-bold ' + (saldoProjetado < 0 ? 'text-red-400' : 'text-green-400')
+              }, fmt(saldoProjetado)),
+              saldoProjetado < 0 && React.createElement('span', {className: 'text-xs text-red-400 mt-1'}, '⚠️ Alerta: saldo negativo!')
+            )
+          )
+        ),
+
+        // Timeline vencimentos
+        React.createElement('div', {className: 'grid grid-cols-2 sm:grid-cols-4 gap-3'},
+          [
+            {titulo: '📅 Vencidas', valor: fmt(totalVencidas), qtd: vencidas.length, cor: 'from-red-600 to-red-800'},
+            {titulo: '📅 Próximos 7 dias', valor: fmt(total7d), qtd: venc7d.length, cor: 'from-amber-600 to-amber-800'},
+            {titulo: '📅 15 dias', valor: fmt(total15d), qtd: venc15d.length, cor: 'from-blue-600 to-blue-800'},
+            {titulo: '📅 30 dias', valor: fmt(total30d), qtd: venc30d.length, cor: 'from-green-600 to-green-800'}
+          ].map(m =>
+            React.createElement('div', {key: m.titulo, className: `bg-gradient-to-br ${m.cor} rounded-xl p-3`},
+              React.createElement('div', {className: 'text-xs text-white/70'}, m.titulo),
+              React.createElement('div', {className: 'text-lg font-bold mt-0.5'}, m.valor),
+              React.createElement('div', {className: 'text-[10px] text-white/50'}, m.qtd + ' fatura(s)')
+            )
+          )
+        ),
+
+        // Tabela Caixa
+        React.createElement('div', {className: 'bg-slate-800 rounded-xl p-4'},
+          React.createElement('div', {className: 'flex justify-between items-center mb-3'},
+            React.createElement('h3', {className: 'text-sm font-semibold text-slate-300'}, '📋 Cronograma de Pagamentos'),
+            aPagarOrdenado.length > 0 && React.createElement('button', {
+              onClick: () => exportarExcel(aPagarOrdenado, 'caixa'),
+              className: 'px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs rounded-lg'
+            }, '📥 Excel')
+          ),
+          aPagarOrdenado.length === 0
+            ? React.createElement('div', {className: 'text-center py-8 text-slate-500'}, 'Nenhuma fatura com data de pagamento')
+            : React.createElement('div', {className: 'overflow-x-auto max-h-[400px] overflow-y-auto scrollbar-thin'},
+                React.createElement('table', {className: 'w-full text-sm'},
+                  React.createElement('thead', null,
+                    React.createElement('tr', {className: 'border-b border-slate-700 text-slate-400 text-xs uppercase'},
+                      React.createElement('th', {className: 'text-left p-2 font-medium'}, 'Fatura'),
+                      React.createElement('th', {className: 'text-left p-2 font-medium hidden md:table-cell'}, 'Fornecedor'),
+                      React.createElement('th', {className: 'text-right p-2 font-medium'}, 'Valor'),
+                      React.createElement('th', {className: 'text-left p-2 font-medium'}, 'Data Pagto'),
+                      React.createElement('th', {className: 'text-center p-2 font-medium'}, 'Status')
+                    )
+                  ),
+                  React.createElement('tbody', null,
+                    aPagarOrdenado.map(f => {
+                      const diff = Math.ceil((new Date(f.data_pagamento+'T12:00:00') - hoje) / (1000*60*60*24));
+                      const corLinha = diff < 0 ? 'bg-red-900/20 border-red-900/30' : diff <= 7 ? 'bg-amber-900/20 border-amber-900/30' : '';
+                      return React.createElement('tr', {key: f.id, className: `border-b border-slate-700/50 hover:bg-slate-700/30 ${corLinha}`},
+                        React.createElement('td', {className: 'p-2'}, React.createElement('div', {className: 'font-medium truncate max-w-[180px]'}, f.nome)),
+                        React.createElement('td', {className: 'p-2 hidden md:table-cell text-slate-300'}, f.fornecedor || '—'),
+                        React.createElement('td', {className: 'p-2 text-right font-mono font-semibold'}, fmt(f.valor)),
+                        React.createElement('td', {className: 'p-2'}, fmtData(f.data_pagamento)),
+                        React.createElement('td', {className: 'p-2 text-center'},
+                          React.createElement('span', {
+                            className: 'text-xs px-2 py-0.5 rounded-full font-medium',
+                            style: {
+                              background: diff < 0 ? '#ef444433' : diff <= 7 ? '#f59e0b33' : '#22c55e33',
+                              color: diff < 0 ? '#ef4444' : diff <= 7 ? '#f59e0b' : '#22c55e'
+                            }
+                          },
+                            diff < 0 ? `Vencida (${Math.abs(diff)}d)` : diff === 0 ? 'Hoje!' : `Em ${diff}d`
+                          )
+                        )
+                      );
+                    })
+                  )
+                )
+              )
+        )
+      ),
+
+      // === MODAL FORM ===
+      showForm && React.createElement('div', {
+        className: 'fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4',
+        onClick: () => { setShowForm(false); setEditando(null); resetForm(); }
+      },
+        React.createElement('div', {
+          className: 'bg-slate-800 rounded-2xl w-full max-w-lg p-5 shadow-2xl border border-slate-700 space-y-4',
+          onClick: e => e.stopPropagation()
+        },
+          React.createElement('div', {className: 'flex justify-between items-center'},
+            React.createElement('h2', {className: 'text-lg font-bold'}, editando ? '✏️ Editar Fatura' : '📄 Nova Fatura'),
+            React.createElement('button', {
+              onClick: () => { setShowForm(false); setEditando(null); resetForm(); },
+              className: 'text-slate-400 hover:text-white text-xl leading-none'
+            }, '×')
+          ),
+
+          // Upload area
+          React.createElement('div', {
+            className: `border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${dragOver ? 'border-brand-500 bg-brand-500/10' : 'border-slate-600 hover:border-slate-500 bg-slate-700/30'}`,
+            onDragOver: e => { e.preventDefault(); setDragOver(true); },
+            onDragLeave: () => setDragOver(false),
+            onDrop: e => { e.preventDefault(); setDragOver(false); handleFileDrop(e.dataTransfer.files); },
+            onClick: () => document.getElementById('fileInput').click()
+          },
+            React.createElement('input', {id: 'fileInput', type: 'file', className: 'hidden', accept: '.pdf,.xlsx,.xls,.csv,.png,.jpg', onChange: e => handleFileDrop(e.target.files)}),
+            React.createElement('div', {className: 'text-3xl mb-2'}, '📎'),
+            React.createElement('p', {className: 'text-sm text-slate-300 font-medium'}, 'Arraste sua fatura aqui'),
+            React.createElement('p', {className: 'text-xs text-slate-500 mt-1'}, 'ou clique para selecionar (PDF, Excel, CSV)'),
+            form.arquivo_nome && React.createElement('div', {className: 'mt-3 inline-block bg-brand-600/20 text-brand-300 text-xs px-3 py-1.5 rounded-full'}, '📎 ' + form.arquivo_nome)
+          ),
+
+          // Form
+          React.createElement('div', {className: 'grid grid-cols-1 sm:grid-cols-2 gap-3'},
+            React.createElement('div', {className: 'sm:col-span-2'},
+              React.createElement('label', {className: labelClass}, 'Nome da Fatura *'),
+              React.createElement('input', {value: form.nome, onChange: e => setForm({...form, nome: e.target.value}), placeholder: 'Ex: Meta Ads Maio/2026', className: inputClass})
+            ),
+            React.createElement('div', null,
+              React.createElement('label', {className: labelClass}, 'Fornecedor'),
+              React.createElement('input', {value: form.fornecedor, onChange: e => setForm({...form, fornecedor: e.target.value, categoria: form.categoria || sugerirCategoria(e.target.value, form.nome)}), placeholder: 'Ex: Meta Ads', className: inputClass})
+            ),
+            React.createElement('div', null,
+              React.createElement('label', {className: labelClass}, 'Valor (R$) *'),
+              React.createElement('input', {type: 'number', step: '0.01', value: form.valor, onChange: e => setForm({...form, valor: e.target.value}), placeholder: '0,00', className: inputClass})
+            ),
+            React.createElement('div', null,
+              React.createElement('label', {className: labelClass}, '📅 Data DRE (Competência)'),
+              React.createElement('input', {type: 'date', value: form.data_dre, onChange: e => setForm({...form, data_dre: e.target.value}), className: inputClass}),
+              React.createElement('p', {className: 'text-[10px] text-slate-500 mt-0.5'}, 'Quando a despesa ocorreu')
+            ),
+            React.createElement('div', null,
+              React.createElement('label', {className: labelClass}, '💳 Data Pagamento Prevista'),
+              React.createElement('input', {type: 'date', value: form.data_pagamento, onChange: e => setForm({...form, data_pagamento: e.target.value}), className: inputClass}),
+              React.createElement('p', {className: 'text-[10px] text-slate-500 mt-0.5'}, 'Data prevista no documento')
+            ),
+            React.createElement('div', null,
+              React.createElement('label', {className: labelClass}, 'Categoria'),
+              React.createElement('select', {value: form.categoria, onChange: e => setForm({...form, categoria: e.target.value}), className: inputClass},
+                React.createElement('option', {value: ''}, 'Selecione...'),
+                CATEGORIAS.map(c => React.createElement('option', {key: c.value, value: c.value}, c.label))
+              )
+            ),
+            React.createElement('div', {className: 'sm:col-span-2'},
+              React.createElement('label', {className: labelClass}, 'Observações'),
+              React.createElement('textarea', {value: form.observacoes, onChange: e => setForm({...form, observacoes: e.target.value}), placeholder: 'Notas...', rows: 2, className: inputClass + ' resize-none'})
+            )
+          ),
+
+          React.createElement('div', {className: 'flex gap-2 pt-2'},
+            React.createElement('button', {
+              onClick: () => { setShowForm(false); setEditando(null); resetForm(); },
+              className: btnClass + ' bg-slate-700 hover:bg-slate-600 text-white flex-1'
+            }, 'Cancelar'),
+            React.createElement('button', {
+              onClick: salvarFatura,
+              className: btnClass + ' bg-brand-600 hover:bg-brand-500 text-white flex-1 font-semibold'
+            }, editando ? '✏️ Atualizar' : '💾 Salvar')
+          )
+        )
+      )
+    );
+  }
+
+  // Inicializar
+  const root = ReactDOM.createRoot(document.getElementById('app'));
+  root.render(React.createElement(React.Fragment, null, render()));
+
+  </script>
+</body>
+</html>
