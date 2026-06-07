@@ -142,7 +142,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
   }
 
   // === RENDER ===
-  function render() {
+  function App() {
     const app = document.getElementById('app');
     if (!app) return;
     
@@ -232,7 +232,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
       saveData(DB);
       resetForm();
       setShowForm(false);
-      render();
+      window.location.reload();
     };
 
     const editar = (item) => {
@@ -255,7 +255,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
       DB.faturas = DB.faturas.filter(f => f.id !== item.id);
       saveData(DB);
       showToast('🗑️ Excluída');
-      render();
+      window.location.reload();
     };
 
     // Meses disponiveis
@@ -646,7 +646,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
 
   // Inicializar
   const root = ReactDOM.createRoot(document.getElementById('app'));
-  root.render(React.createElement(React.Fragment, null, render()));
+  root.render(React.createElement(App));
 
   </script>
 </body>
