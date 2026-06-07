@@ -159,6 +159,7 @@ function showToast(msg, tipo = 'success') {
 }
 
 // ===== GOOGLE DRIVE =====
+const DEFAULT_CLIENT_ID = '685757864448-91bgfjui854sc0g3jj4tsnsh9qpg889c.apps.googleusercontent.com';
 const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE_FOLDER_NAME = 'FinancialS';
 let tokenClient = null;
@@ -461,7 +462,7 @@ function App() {
   const [mesDRE, setMesDRE] = useState('');
   const [mesCaixa, setMesCaixa] = useState('');
   const [dragOver, setDragOver] = useState(false);
-  const [clientId, setClientId] = useState(() => localStorage.getItem('drive_client_id') || '');
+  const [clientId, setClientId] = useState(() => localStorage.getItem('drive_client_id') || DEFAULT_CLIENT_ID);
   const [driveConnected, setDriveConnected] = useState(() => !!getStoredToken());
   const [salvarNoDriveCheck, setSalvarNoDriveCheck] = useState(true);
   const [showConfig, setShowConfig] = useState(false);
