@@ -4,21 +4,58 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>FinancialS - Organizador Financeiro</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: {
+            300: '#ffc299',
+            400: '#ffb066',
+            500: '#ff9501',
+            600: '#ff6300',
+            700: '#f75703'
+          },
+          slate: {
+            600: '#2d4484',
+            700: '#1d2a55',
+            800: '#172448',
+            900: '#0a0e1c'
+          }
+        }
+      }
+    }
+  }
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
+<script src="https://apis.google.com/js/api.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 * { font-family: 'Inter', sans-serif; }
-body { background: #0f172a; }
-.drag-over { border-color: #8b5cf6 !important; background: rgba(139,92,246,0.08) !important; }
+body { background: linear-gradient(180deg, #0a0e1c 0%, #0a0e1c 100%); }
+.drag-over { border-color: #ff6300 !important; background: rgba(255,99,0,0.08) !important; }
+.btn-orange-glow { box-shadow: 0 0 0 0 rgba(247,87,3,0); transition: box-shadow .2s ease; }
+.btn-orange-glow:hover { box-shadow: 0 0 6px 0 #f75703, 0 0 5.2px 4px rgba(247,87,3,0.35), 0 0 40px 5px rgba(247,87,3,0.2); }
 .fade-in { animation: fadeIn 0.3s ease-out; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 .toast { animation: slideDown 0.3s ease-out; }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
 .scrollbar-thin::-webkit-scrollbar { width: 4px; }
 .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-.scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #2d4484; border-radius: 4px; }
+.bg-brand-gradient { background: linear-gradient(90deg, #f75703 0%, #ff9501 100%); }
+.bg-brand-gradient:hover { background: linear-gradient(90deg, #ff9501 0%, #f75703 100%); }
 </style>
 </head>
 <body class="text-white min-h-screen">
@@ -42,20 +79,51 @@ let DB = loadData();
 
 // ===== HELPERS =====
 const CATEGORIAS = [
-  { value: 'Publicidade', label: '📢 Publicidade', cor: '#f472b6' },
-  { value: 'Provedores', label: '🔧 Provedores', cor: '#fbbf24' },
-  { value: 'Viagens', label: '✈️ Viagens', cor: '#34d399' },
-  { value: 'BPO', label: '📋 BPO', cor: '#818cf8' },
-  { value: 'Nao categorizado', label: '❓ Outros', cor: '#94a3b8' }
+  { value: 'Pessoas', label: '👥 Pessoas (Folha PJ + CLT + Encargos)' },
+  { value: 'Ferramentas e Sistemas', label: '🔧 Ferramentas e Sistemas (SaaS, ERPs, BI)' },
+  { value: 'Plataforma e Licenças', label: '🎮 Plataforma e Licenças (NGX, Provedores de Jogos)' },
+  { value: 'Tráfego Pago', label: '📢 Tráfego Pago (Google, Meta, TikTok)' },
+  { value: 'Influencers', label: '⭐ Influencers' },
+  { value: 'Afiliados', label: '🤝 Afiliados' },
+  { value: 'Marketing e Branding', label: '🎨 Marketing e Branding (materiais, eventos)' },
+  { value: 'Fornecedores', label: '📦 Fornecedores (serviços terceirizados)' },
+  { value: 'Consultorias e Assessorias', label: '💼 Consultorias e Assessorias (contábil, jurídico, tributário)' },
+  { value: 'Máquinas e Equipamentos', label: '💻 Máquinas e Equipamentos (hardware, notebooks)' },
+  { value: 'Telecomunicações', label: '📡 Telecomunicações (internet, telefonia, 0800)' },
+  { value: 'Aluguel e Facilities', label: '🏢 Aluguel e Facilities (escritório, coworking, utilities)' },
+  { value: 'Seguros', label: '🛡️ Seguros (D&O, cyber, RC)' },
+  { value: 'Viagens e Deslocamentos', label: '✈️ Viagens e Deslocamentos' },
+  { value: 'Despesas Administrativas', label: '📋 Despesas Administrativas (materiais, correio, cartório)' },
+  { value: 'Impostos e Taxas Regulatórias', label: '🏛️ Impostos e Taxas Regulatórias (Taxa Social, IRPJ, etc.)' },
+  { value: 'Licenças Regulatórias', label: '📜 Licenças Regulatórias (SENARC, taxas de operação)' },
+  { value: 'Contingência / Reserva', label: '💰 Contingência / Reserva' }
 ];
 
 function sugerirCategoria(nome, fornecedor) {
   const txt = ((fornecedor||'') + ' ' + (nome||'')).toLowerCase();
-  if (txt.includes('meta')||txt.includes('facebook')||txt.includes('ads')||txt.includes('adplay')||txt.includes('publicidade')||txt.includes('tiktok')||txt.includes('google ads')) return 'Publicidade';
-  if (txt.includes('viagem')||txt.includes('hotel')||txt.includes('passagem')||txt.includes('uber')||txt.includes('traslado')||txt.includes('aeroporto')) return 'Viagens';
-  if (txt.includes('bpo')||txt.includes('gbarros')||txt.includes('serviços prestados')||txt.includes('terceiriz')||txt.includes('consultoria')) return 'BPO';
-  if (txt.includes('plugni')||txt.includes('telesign')||txt.includes('slack')||txt.includes('clickup')||txt.includes('aws')||txt.includes('sms')||txt.includes('provedor')||txt.includes('internet')) return 'Provedores';
+  if (/(meta|facebook|google ads|tiktok|adplay|adsplay)/.test(txt)) return 'Tráfego Pago';
+  if (/(slack|clickup|notion|jira|aws|amazon web|github|gitlab|plugni|saas|erp|\bbi\b)/.test(txt)) return 'Ferramentas e Sistemas';
+  if (/(viagem|hotel|passagem|uber|traslado|aeroporto|lvt|best travel)/.test(txt)) return 'Viagens e Deslocamentos';
+  if (/(consultor|advoc|advog|contábi|tributári|jurídic|assessor|bpo|gbarros)/.test(txt)) return 'Consultorias e Assessorias';
+  if (/(telesign|claro|vivo| tim |internet|telefonia|sms|0800)/.test(txt)) return 'Telecomunicações';
+  if (/(folha|salári|encargo|inss|fgts|rescisão|\bclt\b|\bpj\b)/.test(txt)) return 'Pessoas';
+  if (/(aluguel|condom|coworking|energia|água|luz|facilit)/.test(txt)) return 'Aluguel e Facilities';
+  if (/(notebook|hardware|monitor|impressora|teclado|equipamento)/.test(txt)) return 'Máquinas e Equipamentos';
+  if (/(seguro|d&o|cyber|apólice)/.test(txt)) return 'Seguros';
+  if (/(influencer|criador)/.test(txt)) return 'Influencers';
+  if (/(afiliado|afiliação)/.test(txt)) return 'Afiliados';
+  if (/(branding|evento|gráfica|patrocínio|material gráfico)/.test(txt)) return 'Marketing e Branding';
+  if (/(\bngx\b|plataforma|provedor de jogos)/.test(txt)) return 'Plataforma e Licenças';
+  if (/(imposto|irpj|csll|\bpis\b|cofins|\biss\b)/.test(txt)) return 'Impostos e Taxas Regulatórias';
+  if (/(senarc|licen[çc]a regul|taxa de operação)/.test(txt)) return 'Licenças Regulatórias';
+  if (/(correio|cartório|sedex|tabelião)/.test(txt)) return 'Despesas Administrativas';
   return '';
+}
+
+function gerarNomeFatura(f) {
+  const cat = (f.categoria || '').split('(')[0].trim();
+  const valor = f.valor ? parseFloat(f.valor).toFixed(2) : '';
+  return [f.fornecedor, valor, f.data_dre, cat].filter(Boolean).join('_');
 }
 
 function fmt(v) {
@@ -91,80 +159,109 @@ function showToast(msg, tipo = 'success') {
 }
 
 // ===== GOOGLE DRIVE =====
-const CLIENT_ID = ''; // USER PREENCHE depois
-const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_FOLDER_NAME = 'FinancialS';
 let tokenClient = null;
-let gapiInited = false;
-let gisInited = false;
+let folderIdCache = null;
 
-function initGapi() {
-  gapi.load('client', async () => {
-    await gapi.client.init({});
-    gapiInited = true;
-  });
+function getStoredToken() {
+  try {
+    const raw = sessionStorage.getItem('drive_token');
+    if (!raw) return null;
+    const t = JSON.parse(raw);
+    if (t.expiresAt && Date.now() < t.expiresAt) return t;
+  } catch(e) {}
+  return null;
 }
 
-function initGis(clientId) {
-  if (!clientId) return;
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: clientId,
-    scope: SCOPES,
-    callback: (resp) => {
-      if (resp.error) { showToast('Erro auth: ' + resp.error, 'error'); return; }
-      showToast('✅ Google Drive conectado!');
+function setStoredToken(token, expiresInSec) {
+  sessionStorage.setItem('drive_token', JSON.stringify({
+    access_token: token,
+    expiresAt: Date.now() + (expiresInSec * 1000) - 60_000
+  }));
+}
+
+function clearStoredToken() {
+  sessionStorage.removeItem('drive_token');
+  folderIdCache = null;
+}
+
+function requestDriveToken(clientId, { prompt = '' } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!window.google?.accounts?.oauth2) {
+      reject(new Error('Google Identity Services não carregado'));
+      return;
     }
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: DRIVE_SCOPES,
+      callback: (resp) => {
+        if (resp.error) { reject(new Error(resp.error)); return; }
+        setStoredToken(resp.access_token, resp.expires_in || 3600);
+        resolve(resp.access_token);
+      },
+      error_callback: (err) => reject(err)
+    });
+    tokenClient.requestAccessToken({ prompt });
   });
-  gisInited = true;
 }
 
-function connectDrive(clientId) {
-  if (!clientId) { showToast('⚠️ Configure o Client ID primeiro', 'error'); return; }
-  if (!gisInited) initGis(clientId);
-  tokenClient.requestAccessToken({ prompt: 'consent' });
+async function getDriveToken(clientId, { interactive = false } = {}) {
+  const stored = getStoredToken();
+  if (stored) return stored.access_token;
+  return await requestDriveToken(clientId, { prompt: interactive ? 'consent' : '' });
 }
 
-async function salvarNoDrive(fatura, clientId) {
-  if (!clientId) { showToast('⚠️ Configure o Client ID do Google Drive', 'error'); return false; }
-  if (!gisInited) initGis(clientId);
-  
-  return new Promise((resolve) => {
-    tokenClient.callback = async (resp) => {
-      if (resp.error) { showToast('Erro auth Drive', 'error'); resolve(false); return; }
-      try {
-        const mes = (fatura.data_dre || '').substring(0,7);
-        const nomeArquivo = `${mes}_${fatura.fornecedor || 'fornecedor'}_${fatura.valor}_${fatura.categoria || 'NC'}.json`;
-        const conteudo = JSON.stringify(fatura, null, 2);
-        
-        // Criar arquivo no Drive
-        const metadata = {
-          name: nomeArquivo,
-          mimeType: 'application/json',
-          parents: ['root']
-        };
-        const form = new FormData();
-        form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-        form.append('file', new Blob([conteudo], { type: 'application/json' }));
-        
-        const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-          method: 'POST',
-          headers: new Headers({ Authorization: 'Bearer ' + gapi.client.getToken().access_token }),
-          body: form
-        });
-        const result = await response.json();
-        if (result.id) {
-          showToast('✅ Salvo no Drive: ' + nomeArquivo);
-          resolve(true);
-        } else {
-          showToast('Erro ao salvar no Drive', 'error');
-          resolve(false);
-        }
-      } catch(e) {
-        showToast('Erro Drive: ' + e.message, 'error');
-        resolve(false);
-      }
-    };
-    tokenClient.requestAccessToken({ prompt: '' });
+async function ensureDriveFolder(token) {
+  if (folderIdCache) return folderIdCache;
+  const q = `name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
+    headers: { Authorization: 'Bearer ' + token }
   });
+  const searchData = await searchRes.json();
+  if (searchData.files?.length) { folderIdCache = searchData.files[0].id; return folderIdCache; }
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' })
+  });
+  const created = await createRes.json();
+  folderIdCache = created.id;
+  return folderIdCache;
+}
+
+function base64ToBlob(base64, mimeType) {
+  const bytes = atob(base64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr], { type: mimeType || 'application/octet-stream' });
+}
+
+async function uploadFileToDrive(token, folderId, fileName, blob) {
+  const metadata = { name: fileName, parents: [folderId] };
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', blob);
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink,name', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token },
+    body: form
+  });
+  const data = await res.json();
+  if (!data.id) throw new Error(data?.error?.message || 'Falha no upload');
+  return data;
+}
+
+async function salvarFaturaNoDrive(clientId, fatura) {
+  const token = await getDriveToken(clientId);
+  const folderId = await ensureDriveFolder(token);
+  const anexo = fatura.arquivo_anexado;
+  if (!anexo?.base64) throw new Error('Arquivo não anexado');
+  const ext = (anexo.name?.split('.').pop() || 'pdf').toLowerCase();
+  const nomeArquivo = `${fatura.nome || 'fatura'}.${ext}`.replace(/[/\\:*?"<>|]/g, '_');
+  const blob = base64ToBlob(anexo.base64, anexo.mimeType);
+  const result = await uploadFileToDrive(token, folderId, nomeArquivo, blob);
+  return result;
 }
 
 // ===== EXPORT EXCEL =====
@@ -187,11 +284,176 @@ function exportarExcel(linhas, prefixo) {
   showToast('✅ Excel baixado!');
 }
 
+// ===== PARSING DE FATURA =====
+const FORNECEDOR_KEYWORDS = [
+  { match: ['meta', 'facebook'], nome: 'Meta Ads (Facebook)' },
+  { match: ['adplay'], nome: 'ADSPLAY Mídia' },
+  { match: ['plugni'], nome: 'Plugni Tecnologia' },
+  { match: ['telesign'], nome: 'Telesign do Brasil' },
+  { match: ['slack'], nome: 'Slack' },
+  { match: ['clickup'], nome: 'ClickUp' },
+  { match: ['ifood'], nome: 'iFood Benefícios' },
+  { match: ['lvt', 'best travel'], nome: 'Bruno Best Travel (LVT Viagens)' },
+  { match: ['google ads', 'google llc'], nome: 'Google Ads' },
+  { match: ['amazon web', 'aws'], nome: 'Amazon Web Services' },
+  { match: ['tiktok'], nome: 'TikTok Ads' },
+];
+
+function sugerirFornecedorPorTexto(texto) {
+  if (!texto) return '';
+  const low = texto.toLowerCase();
+  for (const k of FORNECEDOR_KEYWORDS) {
+    if (k.match.some(m => low.includes(m))) return k.nome;
+  }
+  return '';
+}
+
+function parseBRL(s) {
+  if (!s) return NaN;
+  const clean = String(s).trim();
+  if (clean.includes(',')) return parseFloat(clean.replace(/\./g, '').replace(',', '.'));
+  return parseFloat(clean);
+}
+
+function dmyToIso(dmy) {
+  const p = dmy.split('/');
+  if (p.length !== 3) return '';
+  return `${p[2]}-${p[1].padStart(2,'0')}-${p[0].padStart(2,'0')}`;
+}
+
+function parseInvoiceText(texto) {
+  const out = { valor: '', data_pagamento: '', data_dre: '', fornecedor: '' };
+  if (!texto) return out;
+
+  // Valor: prioriza padrões "Total a pagar" / "Valor total"
+  const padroesValor = [
+    /total\s+a\s+pagar[^\d\n]{0,15}R?\$?\s*([\d.,]+)/i,
+    /valor\s+total[^\d\n]{0,15}R?\$?\s*([\d.,]+)/i,
+    /valor\s+do\s+documento[^\d\n]{0,15}R?\$?\s*([\d.,]+)/i,
+    /total[^\d\n]{0,10}R?\$?\s*([\d.,]+\d{2})/i,
+  ];
+  for (const p of padroesValor) {
+    const m = texto.match(p);
+    if (m) {
+      const v = parseBRL(m[1]);
+      if (!isNaN(v) && v > 0) { out.valor = v.toFixed(2); break; }
+    }
+  }
+  if (!out.valor) {
+    const matches = [...texto.matchAll(/R\$\s*([\d.,]+)/g)]
+      .map(m => parseBRL(m[1])).filter(v => !isNaN(v) && v > 0);
+    if (matches.length) out.valor = Math.max(...matches).toFixed(2);
+  }
+
+  // Data de pagamento: rótulo "Vencimento"
+  const vencMatch = texto.match(/venc(?:imento|e\s+em|er)[^\d]{0,20}(\d{2}\/\d{2}\/\d{4})/i)
+    || texto.match(/(?:pagar\s+at[ée]|data\s+(?:de\s+)?pagamento)[^\d]{0,20}(\d{2}\/\d{2}\/\d{4})/i);
+  if (vencMatch) out.data_pagamento = dmyToIso(vencMatch[1]);
+
+  // Data de emissão / competência
+  const emisMatch = texto.match(/(?:emiss[ãa]o|emit(?:ida|ido)|data\s+(?:da\s+)?(?:nota|fatura))[^\d]{0,20}(\d{2}\/\d{2}\/\d{4})/i);
+  if (emisMatch) out.data_dre = dmyToIso(emisMatch[1]);
+
+  // Fallback de datas
+  if (!out.data_pagamento || !out.data_dre) {
+    const todasDatas = [...texto.matchAll(/(\d{2}\/\d{2}\/\d{4})/g)]
+      .map(m => dmyToIso(m[1])).filter(Boolean).sort();
+    if (todasDatas.length) {
+      if (!out.data_dre) out.data_dre = todasDatas[0];
+      if (!out.data_pagamento) out.data_pagamento = todasDatas[todasDatas.length - 1];
+    }
+  }
+
+  // Fornecedor: palavras-chave conhecidas (mais confiável que regex de razão social)
+  out.fornecedor = sugerirFornecedorPorTexto(texto);
+
+  return out;
+}
+
+async function extractPDFText(file) {
+  if (!window.pdfjsLib) throw new Error('PDF.js não carregado');
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const partes = [];
+  const maxPaginas = Math.min(pdf.numPages, 5);
+  for (let i = 1; i <= maxPaginas; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    partes.push(content.items.map(it => it.str).join(' '));
+  }
+  return partes.join('\n');
+}
+
+async function extractTabularText(file, ext) {
+  if (ext === 'csv') return await file.text();
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  return wb.SheetNames.map(n => XLSX.utils.sheet_to_csv(wb.Sheets[n])).join('\n');
+}
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = e => res(e.target.result.split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+function sugerirMesPorNome(nomeLimpo) {
+  const mesMatch = nomeLimpo.match(/(\w{3,4})(?:\/|_|-|de\s)?(\d{4})/i);
+  if (!mesMatch) return '';
+  const meses = {jan:'01',fev:'02',mar:'03',abr:'04',mai:'05',jun:'06',jul:'07',ago:'08',set:'09',out:'10',nov:'11',dez:'12',
+                 janeiro:'01',fevereiro:'02',março:'03',abril:'04',maio:'05',junho:'06',julho:'07',agosto:'08',setembro:'09',outubro:'10',novembro:'11',dezembro:'12',
+                 january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',july:'07',august:'08',september:'09',october:'10',november:'11',december:'12'};
+  const mt = mesMatch[1].toLowerCase().substring(0,3);
+  const ano = mesMatch[2];
+  return meses[mt] ? `${ano}-${meses[mt]}-01` : '';
+}
+
+async function parseFile(file) {
+  const nomeArquivo = file.name;
+  const nomeLimpo = nomeArquivo.replace(/\.(pdf|xlsx|xls|csv|png|jpg|jpeg)$/i, '');
+  const ext = (nomeArquivo.split('.').pop() || '').toLowerCase();
+  const base64 = await fileToBase64(file);
+
+  let fornecedor = sugerirFornecedorPorTexto(nomeLimpo);
+  let valor = '';
+  let data_pagamento = '';
+  let data_dre = sugerirMesPorNome(nomeLimpo) || new Date().toISOString().split('T')[0];
+
+  let texto = '';
+  try {
+    if (ext === 'pdf') texto = await extractPDFText(file);
+    else if (ext === 'csv' || ext === 'xlsx' || ext === 'xls') texto = await extractTabularText(file, ext);
+  } catch (e) {
+    console.warn('Extração de texto falhou:', e);
+  }
+
+  if (texto) {
+    const parsed = parseInvoiceText(texto);
+    if (parsed.valor) valor = parsed.valor;
+    if (parsed.data_pagamento) data_pagamento = parsed.data_pagamento;
+    if (parsed.data_dre) data_dre = parsed.data_dre;
+    if (parsed.fornecedor && !fornecedor) fornecedor = parsed.fornecedor;
+  }
+
+  return {
+    arquivo_nome: nomeArquivo,
+    arquivo_anexado: { name: nomeArquivo, base64, mimeType: file.type || 'application/octet-stream' },
+    fornecedor,
+    categoria: sugerirCategoria(nomeLimpo, fornecedor),
+    valor,
+    data_dre,
+    data_pagamento,
+    observacoes: `Anexado: ${nomeArquivo}`
+  };
+}
+
 // ===== COMPONENTE PRINCIPAL =====
 function App() {
   const [aba, setAba] = useState('dre');
   const [filtroCat, setFiltroCat] = useState('');
-  const [filtroStatus, setFiltroStatus] = useState('');
   const [busca, setBusca] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editando, setEditando] = useState(null);
@@ -199,16 +461,44 @@ function App() {
   const [mesDRE, setMesDRE] = useState('');
   const [mesCaixa, setMesCaixa] = useState('');
   const [dragOver, setDragOver] = useState(false);
-  const [clientId, setClientId] = useState('');
+  const [clientId, setClientId] = useState(() => localStorage.getItem('drive_client_id') || '');
+  const [driveConnected, setDriveConnected] = useState(() => !!getStoredToken());
+  const [salvarNoDriveCheck, setSalvarNoDriveCheck] = useState(true);
   const [showConfig, setShowConfig] = useState(false);
   const [lendoIA, setLendoIA] = useState(false);
+  const [salvandoDrive, setSalvandoDrive] = useState(false);
   const [anexos, setAnexos] = useState([]);
   const fileInputRef = useRef(null);
 
+  useEffect(() => {
+    if (clientId) localStorage.setItem('drive_client_id', clientId);
+    else localStorage.removeItem('drive_client_id');
+  }, [clientId]);
+
+  const conectarDrive = async () => {
+    if (!clientId) { showToast('⚠️ Configure o Client ID primeiro', 'error'); return; }
+    try {
+      await requestDriveToken(clientId, { prompt: 'consent' });
+      setDriveConnected(true);
+      showToast('✅ Google Drive conectado!');
+    } catch (e) {
+      setDriveConnected(false);
+      showToast('Erro ao conectar: ' + (e.message || 'auth cancelada'), 'error');
+    }
+  };
+
+  const desconectarDrive = () => {
+    clearStoredToken();
+    setDriveConnected(false);
+    showToast('Drive desconectado');
+  };
+
   const [form, setForm] = useState({
-    nome: '', fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
-    categoria: '', status: 'Pendente', observacoes: '', arquivo_nome: '', arquivo_anexado: null
+    fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
+    categoria: '', observacoes: '', arquivo_nome: '', arquivo_anexado: null
   });
+  const [tick, setTick] = useState(0);
+  const refresh = () => setTick(t => t + 1);
 
   const faturas = DB.faturas || [];
 
@@ -222,150 +512,86 @@ function App() {
   }, [saldoInput]);
 
   const resetForm = () => setForm({
-    nome: '', fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
-    categoria: '', status: 'Pendente', observacoes: '', arquivo_nome: '', arquivo_anexado: null
+    fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
+    categoria: '', observacoes: '', arquivo_nome: '', arquivo_anexado: null
   });
 
-  // ===== LEITURA DE PDF COM IA =====
-  const lerPDFcomIA = async (arquivo) => {
+  // ===== LEITURA DE FATURA (PDF.js + heurísticas) =====
+  const processarArquivo = async (arquivo, abrirForm = true) => {
     setLendoIA(true);
     try {
-      // Extrair texto do PDF via FileReader
-      const text = await arquivo.text();
-      const nomeArquivo = arquivo.name;
-      const nomeLimpo = nomeArquivo.replace(/\.(pdf|xlsx|xls|csv|png|jpg|jpeg)$/i,'');
-      const partes = nomeLimpo.split(/[-_]/);
-      
-      // Identificar fornecedor pelo nome do arquivo
-      let fornecedorSugerido = '';
-      const txtLower = nomeLimpo.toLowerCase();
-      
-      if (txtLower.includes('meta') || txtLower.includes('facebook')) fornecedorSugerido = 'Meta Ads (Facebook)';
-      else if (txtLower.includes('adplay')) fornecedorSugerido = 'ADSPLAY Mídia';
-      else if (txtLower.includes('plugni') || txtLower.includes('apostou') && txtLower.includes('2506')) fornecedorSugerido = 'Plugni Tecnologia';
-      else if (txtLower.includes('telesign') || txtLower.includes('betbr')) fornecedorSugerido = 'Telesign do Brasil';
-      else if (txtLower.includes('slack')) fornecedorSugerido = 'Slack';
-      else if (txtLower.includes('clickup')) fornecedorSugerido = 'ClickUp';
-      else if (txtLower.includes('ifood')) fornecedorSugerido = 'iFood Benefícios';
-      else if (txtLower.includes('lvt') || txtLower.includes('viagens') && txtLower.includes('nfs')) fornecedorSugerido = 'Bruno Best Travel (LVT Viagens)';
-      else if (partes.length >= 2) fornecedorSugerido = partes.slice(0, Math.min(2, partes.length-1)).join(' ').trim();
-      
-      // Tentar extrair valor do texto do PDF
-      let valorExtraido = '';
-      if (text) {
-        const valorMatch = text.match(/R\$\s*([\d.,]+)/);
-        if (valorMatch) {
-          let v = valorMatch[1].replace(/\./g,'').replace(',','.');
-          if (!isNaN(parseFloat(v))) valorExtraido = parseFloat(v).toString();
-        }
-        // Tentar data de vencimento
-        const dataMatch = text.match(/(\d{2}\/\d{2}\/\d{4})/);
-        if (dataMatch) {
-          const partesData = dataMatch[1].split('/');
-          // Usar como data_pagamento
-        }
-      }
-      
-      const catSugerida = sugerirCategoria(nomeLimpo, fornecedorSugerido);
-      const hoje = new Date().toISOString().split('T')[0];
-      
-      // Determinar mês de competência pelo nome
-      let mesCompetencia = hoje;
-      const mesMatch = nomeLimpo.match(/(\w{3,4})(?:\/|_|-|de\s)?(\d{4})/i);
-      if (mesMatch) {
-        const mesesMap = {jan:'01',fev:'02',mar:'03',abr:'04',mai:'05',jun:'06',jul:'07',ago:'08',set:'09',out:'10',nov:'11',dez:'12',
-                         janeiro:'01',fevereiro:'02',março:'03',abril:'04',maio:'05',junho:'06',julho:'07',agosto:'08',setembro:'09',outubro:'10',novembro:'11',dezembro:'12',
-                         january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',july:'07',august:'08',september:'09',october:'10',november:'11',december:'12'};
-        const mesTxt = mesMatch[1].toLowerCase().substring(0,3);
-        const ano = mesMatch[2];
-        if (mesesMap[mesTxt]) {
-          mesCompetencia = ano + '-' + mesesMap[mesTxt] + '-01';
-        }
-      }
-
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const base64 = e.target.result.split(',')[1];
-        setForm({
-          ...form,
-          arquivo_nome: nomeArquivo,
-          arquivo_anexado: { name: nomeArquivo, base64 },
-          nome: nomeLimpo,
-          fornecedor: fornecedorSugerido,
-          categoria: catSugerida,
-          valor: valorExtraido || '',
-          data_dre: mesCompetencia,
-          data_pagamento: '',
-          status: 'Pendente',
-          observacoes: `Extraído automaticamente de: ${nomeArquivo}`
-        });
-        setShowForm(true);
-        showToast('📄 IA leu "' + nomeArquivo + '"!');
-        setLendoIA(false);
-      };
-      reader.readAsDataURL(arquivo);
-      
-    } catch(e) {
-      // Fallback: só preencher pelo nome do arquivo
-      const nomeArquivo = arquivo.name;
-      const nomeLimpo = nomeArquivo.replace(/\.(pdf|xlsx|xls|csv|png|jpg|jpeg)$/i,'');
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const base64 = e.target.result.split(',')[1];
-        setForm({
-          ...form,
-          arquivo_nome: nomeArquivo,
-          arquivo_anexado: { name: nomeArquivo, base64 },
-          nome: nomeLimpo,
-          fornecedor: '',
-          categoria: sugerirCategoria(nomeLimpo, ''),
-          valor: '',
-          data_dre: new Date().toISOString().split('T')[0],
-          data_pagamento: '',
-          observacoes: `Anexado: ${nomeArquivo}`
-        });
-        setShowForm(true);
-        setLendoIA(false);
-        showToast('📄 Arquivo lido! Preencha os dados manualmente');
-      };
-      reader.readAsDataURL(arquivo);
+      const sugerido = await parseFile(arquivo);
+      setForm(f => ({ ...f, ...sugerido }));
+      if (abrirForm) setShowForm(true);
+      const partes = [];
+      if (sugerido.valor) partes.push(fmt(parseFloat(sugerido.valor)));
+      if (sugerido.fornecedor) partes.push(sugerido.fornecedor);
+      if (sugerido.data_pagamento) partes.push('vence ' + fmtData(sugerido.data_pagamento));
+      showToast(partes.length ? `📄 Extraído: ${partes.join(' • ')}` : '📄 Anexado — preencha os dados');
+    } catch (e) {
+      console.error(e);
+      showToast('Erro ao ler arquivo', 'error');
     }
+    setLendoIA(false);
   };
 
   // ===== HANDLE DROP =====
   const handleDrop = (files) => {
     setDragOver(false);
     if (!files || files.length === 0) return;
-    
     const file = files[0];
-    const novoAnexo = { name: file.name, size: file.size, tipo: file.type };
-    setAnexos(prev => [novoAnexo, ...prev].slice(0, 20));
-    
-    // Tentar ler com IA
-    lerPDFcomIA(file);
+    setAnexos(prev => [{ name: file.name, size: file.size, tipo: file.type }, ...prev].slice(0, 20));
+    processarArquivo(file, true);
+  };
+
+  // ===== HANDLE UPLOAD DENTRO DO MODAL =====
+  const modalFileInputRef = useRef(null);
+  const handleModalUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processarArquivo(file, false);
+    e.target.value = '';
   };
 
   // ===== SALVAR FATURA =====
   const salvarFatura = async () => {
-    if (!form.nome || !form.valor) {
-      showToast('⚠️ Preencha nome e valor', 'error');
+    if (!form.fornecedor || !form.valor) {
+      showToast('⚠️ Preencha fornecedor e valor', 'error');
       return;
     }
-    
+
     const fatura = {
       id: editando ? editando.id : gerarId(),
-      nome: form.nome,
+      nome: gerarNomeFatura(form),
       fornecedor: form.fornecedor,
       valor: parseFloat(form.valor) || 0,
       data_dre: form.data_dre || new Date().toISOString().split('T')[0],
       data_pagamento: form.data_pagamento || '',
       categoria: form.categoria || 'Nao categorizado',
-      status: form.status || 'Pendente',
       observacoes: form.observacoes || '',
       arquivo_nome: form.arquivo_nome || '',
       arquivo_anexado: form.arquivo_anexado || null,
-      criado_em: new Date().toISOString()
+      drive_file_id: editando?.drive_file_id || null,
+      drive_link: editando?.drive_link || null,
+      criado_em: editando?.criado_em || new Date().toISOString()
     };
+
+    const deveSalvarDrive = driveConnected && salvarNoDriveCheck && fatura.arquivo_anexado && !fatura.drive_file_id;
+    if (deveSalvarDrive) {
+      setSalvandoDrive(true);
+      try {
+        const result = await salvarFaturaNoDrive(clientId, fatura);
+        fatura.drive_file_id = result.id;
+        fatura.drive_link = result.webViewLink;
+        showToast('☁️ Salvo no Drive: ' + result.name);
+      } catch (e) {
+        showToast('Erro Drive: ' + (e.message || 'falha no upload'), 'error');
+        if (String(e.message || '').toLowerCase().includes('token')) setDriveConnected(false);
+        setSalvandoDrive(false);
+        return;
+      }
+      setSalvandoDrive(false);
+    }
 
     if (editando) {
       const idx = DB.faturas.findIndex(f => f.id === editando.id);
@@ -374,25 +600,16 @@ function App() {
       setEditando(null);
     } else {
       DB.faturas.push(fatura);
-      showToast('✅ Fatura cadastrada!');
-      
-      // Tentar salvar no Drive
-      if (clientId && gisInited) {
-        await salvarNoDrive(fatura, clientId);
-      }
+      showToast(deveSalvarDrive ? '✅ Salvo localmente + Drive!' : '✅ Fatura cadastrada!');
     }
     saveData(DB);
     resetForm();
     setShowForm(false);
-    
-    // Forçar re-render
-    const evt = new Event('storage');
-    window.dispatchEvent(evt);
+    refresh();
   };
 
   const editar = (item) => {
     setForm({
-      nome: item.nome || '',
       arquivo_nome: item.arquivo_nome || '',
       arquivo_anexado: item.arquivo_anexado || null,
       fornecedor: item.fornecedor || '',
@@ -400,7 +617,6 @@ function App() {
       data_dre: item.data_dre || '',
       data_pagamento: item.data_pagamento || '',
       categoria: item.categoria || '',
-      status: item.status || 'Pendente',
       observacoes: item.observacoes || ''
     });
     setEditando(item);
@@ -412,23 +628,12 @@ function App() {
     DB.faturas = DB.faturas.filter(f => f.id !== item.id);
     saveData(DB);
     showToast('🗑️ Excluída');
-    // Forçar re-render
-    const evt = new Event('storage');
-    window.dispatchEvent(evt);
-  };
-
-  const toggleStatus = (item) => {
-    const statusList = ['Pendente', 'Pago', 'Agendado', 'Vencido'];
-    const idx = statusList.indexOf(item.status);
-    const prox = statusList[(idx + 1) % statusList.length];
-    const f = DB.faturas.find(x => x.id === item.id);
-    if (f) { f.status = prox; saveData(DB); showToast(`Status: ${prox}`); }
+    refresh();
   };
 
   // Filtrar
   const faturasFiltradas = faturas.filter(f => {
     if (filtroCat && f.categoria !== filtroCat) return false;
-    if (filtroStatus && f.status !== filtroStatus) return false;
     if (busca) {
       const t = busca.toLowerCase();
       if (!(f.nome||'').toLowerCase().includes(t) && !(f.fornecedor||'').toLowerCase().includes(t)) return false;
@@ -446,21 +651,21 @@ function App() {
 
   // Metricas
   const totalDRE = faturasDRE.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
-  const totalPagoDRE = faturasDRE.filter(f => f.status === 'Pago').reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
-  const totalPendenteDRE = faturasDRE.filter(f => f.status === 'Pendente' || f.status === 'Vencido').reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+  const totalCategorias = CATEGORIAS.length;
+  const categoriasUsadas = new Set(faturasDRE.map(f => f.categoria).filter(Boolean)).size;
 
   const saldoAtual = parseFloat(saldoInput) || 0;
-  const aPagarCaixa = faturasCaixa.filter(f => f.status === 'Pendente' || f.status === 'Vencido').reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
+  const aPagarCaixa = faturasCaixa.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
   const saldoProjetado = saldoAtual - aPagarCaixa;
 
-  // Proximos vencimentos
-  const hoje = new Date('2026-06-07T12:00:00');
-  const aPagarOrdenado = faturas.filter(f => (f.status === 'Pendente' || f.status === 'Vencido') && f.data_pagamento)
+  // Proximos vencimentos (todas as faturas com data de pagamento futura)
+  const hoje = (() => { const d = new Date(); d.setHours(12,0,0,0); return d; })();
+  const aPagarOrdenado = faturas.filter(f => f.data_pagamento)
     .sort((a,b) => (a.data_pagamento||'').localeCompare(b.data_pagamento||''));
 
   const venc7d = aPagarOrdenado.filter(f => {
     const diff = (new Date(f.data_pagamento+'T12:00:00') - hoje) / (1000*60*60*24);
-    return diff <= 7;
+    return diff >= 0 && diff <= 7;
   });
   const total7d = venc7d.reduce((s,f) => s + (parseFloat(f.valor)||0), 0);
 
@@ -470,29 +675,61 @@ function App() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl md:text-2xl font-bold text-white">FinancialS</h1>
+          <h1 className="text-xl md:text-2xl font-bold text-white">Financial<span className="bg-clip-text text-transparent bg-brand-gradient">S</span></h1>
           <p className="text-xs text-slate-400">Organizador Financeiro — DRE + Fluxo de Caixa</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => setShowConfig(true)} className="px-3 py-1.5 rounded-lg text-xs bg-slate-700 text-slate-300 hover:bg-slate-600">⚙️</button>
-          <button onClick={() => setShowForm(true)} className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 hover:bg-brand-500">+ Nova Fatura</button>
+        <div className="flex gap-2 items-center">
+          <button onClick={() => setShowConfig(true)} className="px-3 py-1.5 rounded-lg text-xs bg-slate-700 text-slate-300 hover:bg-slate-600 flex items-center gap-1.5">
+            <span className={'w-1.5 h-1.5 rounded-full ' + (driveConnected ? 'bg-green-400' : 'bg-slate-500')}></span>
+            ☁️ Drive
+          </button>
+          <button onClick={() => setShowForm(true)} className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-brand-gradient btn-orange-glow">+ Nova Fatura</button>
         </div>
       </div>
 
       {/* Config Modal */}
       {showConfig && (
-        <div className="fixed inset-0 bg-black/60 z-40 flex items-center justify-center p-4" onClick={() => setShowConfig(false)}>
-          <div className="bg-slate-800 rounded-xl p-5 max-w-md w-full" onClick={e => e.stopPropagation()}>
-            <h2 className="text-lg font-bold mb-4">⚙️ Configurações</h2>
+        <div className="fixed inset-0 bg-black/60 z-40 flex items-center justify-center p-4 overflow-auto" onClick={() => setShowConfig(false)}>
+          <div className="bg-slate-800 rounded-xl p-5 max-w-lg w-full my-8" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-bold mb-4">⚙️ Google Drive</h2>
+
+            <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-lg bg-slate-900">
+              <span className={'w-2 h-2 rounded-full ' + (driveConnected ? 'bg-green-400' : 'bg-slate-500')}></span>
+              <span className="text-sm text-slate-300">{driveConnected ? 'Conectado' : 'Desconectado'}</span>
+            </div>
+
+            <details className="mb-4 bg-slate-900 rounded-lg p-3 text-xs text-slate-300">
+              <summary className="cursor-pointer text-slate-200 font-medium">📋 Como obter o Client ID (1ª vez)</summary>
+              <ol className="list-decimal pl-5 mt-2 space-y-1.5">
+                <li>Abra <span className="text-brand-400">console.cloud.google.com</span> e crie um projeto.</li>
+                <li>Em <b>APIs &amp; Services → Library</b>, ative <b>Google Drive API</b>.</li>
+                <li>Em <b>APIs &amp; Services → OAuth consent screen</b>, escolha <b>External</b>, preencha nome do app + seu email, adicione seu email em <b>Test users</b>.</li>
+                <li>Em <b>APIs &amp; Services → Credentials → Create credentials → OAuth client ID → Web application</b>:
+                  <ul className="list-disc pl-5 mt-1">
+                    <li><b>Authorized JavaScript origins:</b> <code className="bg-slate-800 px-1 rounded">http://localhost:3094</code> e a URL do GitHub Pages</li>
+                  </ul>
+                </li>
+                <li>Copie o <b>Client ID</b> (termina em <code>.apps.googleusercontent.com</code>) e cole abaixo.</li>
+              </ol>
+            </details>
+
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-slate-400">Google Drive Client ID (opcional)</label>
-                <input value={clientId} onChange={e => setClientId(e.target.value)} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" placeholder="Seu Client ID..." />
+                <label className="text-xs text-slate-400">Client ID</label>
+                <input value={clientId} onChange={e => setClientId(e.target.value)} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1 font-mono" placeholder="xxxxx.apps.googleusercontent.com" />
               </div>
-              {clientId && (
-                <button onClick={() => connectDrive(clientId)} className="w-full px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-500">🔗 Conectar Google Drive</button>
+              <div className="flex gap-2">
+                {!driveConnected ? (
+                  <button onClick={conectarDrive} disabled={!clientId} className="flex-1 px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500">🔗 Conectar Drive</button>
+                ) : (
+                  <button onClick={desconectarDrive} className="flex-1 px-4 py-2 rounded-lg text-sm bg-slate-700 hover:bg-slate-600">Desconectar</button>
+                )}
+              </div>
+              {driveConnected && (
+                <p className="text-xs text-slate-400">Arquivos são salvos na pasta <code className="bg-slate-900 px-1 rounded">FinancialS</code> do seu Drive. A app só vê arquivos que ela mesma criou (scope <code>drive.file</code>).</p>
               )}
             </div>
+
             <button onClick={() => setShowConfig(false)} className="w-full mt-4 px-4 py-2 rounded-lg text-sm bg-slate-700 hover:bg-slate-600">Fechar</button>
           </div>
         </div>
@@ -501,8 +738,8 @@ function App() {
       {/* Abas */}
       <div className="flex gap-1 bg-slate-800 rounded-xl p-1">
         {['dre', 'caixa'].map(a => (
-          <button key={a} onClick={() => { setAba(a); }} 
-            className={'flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition ' + (aba === a ? 'bg-brand-600 text-white shadow' : 'text-slate-400 hover:text-white')}>
+          <button key={a} onClick={() => { setAba(a); }}
+            className={'flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition ' + (aba === a ? 'bg-brand-gradient text-white shadow' : 'text-slate-400 hover:text-white')}>
             {a === 'dre' ? '📋 DRE (Competência)' : '💰 Fluxo de Caixa'}
           </button>
         ))}
@@ -526,13 +763,6 @@ function App() {
           <option value="">Todas categorias</option>
           {CATEGORIAS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
         </select>
-        <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-700 border border-slate-600 text-white text-xs">
-          <option value="">Todos status</option>
-          <option value="Pendente">⏳ Pendente</option>
-          <option value="Pago">✅ Pago</option>
-          <option value="Vencido">🔴 Vencido</option>
-          <option value="Agendado">📅 Agendado</option>
-        </select>
         <input value={busca} onChange={e => setBusca(e.target.value)} className="flex-1 min-w-[120px] px-3 py-1.5 rounded-lg bg-slate-700 border border-slate-600 text-white text-xs" placeholder="🔍 Buscar..." />
       </div>
 
@@ -554,16 +784,16 @@ function App() {
         <div className="fixed inset-0 bg-black/60 z-30 flex items-start justify-center p-4 pt-10 overflow-auto" onClick={() => !editando && resetForm()}>
           <div className="bg-slate-800 rounded-xl p-5 max-w-lg w-full" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-bold mb-4">{editando ? '✏️ Editar Fatura' : '📄 Nova Fatura'}</h2>
-            {form.arquivo_nome && (
-              <div className="px-3 py-2 bg-slate-700 rounded-lg text-xs text-slate-300 mb-3">📎 {form.arquivo_nome}</div>
-            )}
+            <div className="mb-4">
+              <input ref={modalFileInputRef} type="file" accept=".pdf,.csv,.xlsx,.xls,.png,.jpg,.jpeg" className="hidden" onChange={handleModalUpload} />
+              <button type="button" onClick={() => modalFileInputRef.current?.click()} className="w-full px-4 py-3 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 border border-dashed border-slate-500 text-slate-200">
+                📎 {form.arquivo_nome ? `Trocar arquivo: ${form.arquivo_nome}` : 'Anexar Fatura (PDF, Excel, CSV) — extrai dados automaticamente'}
+              </button>
+              {lendoIA && <p className="text-brand-400 text-xs mt-2 animate-pulse">🤖 Lendo documento...</p>}
+            </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2">
-                <label className="text-xs text-slate-400">Nome da Fatura *</label>
-                <input value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" placeholder="Ex: Meta Ads - Maio/2026" />
-              </div>
               <div>
-                <label className="text-xs text-slate-400">Fornecedor</label>
+                <label className="text-xs text-slate-400">Fornecedor *</label>
                 <input value={form.fornecedor} onChange={e => setForm({...form, fornecedor: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" placeholder="Ex: Meta Ads" />
               </div>
               <div>
@@ -578,32 +808,39 @@ function App() {
                 <label className="text-xs text-slate-400">Data Pagamento Prevista</label>
                 <input type="date" value={form.data_pagamento} onChange={e => setForm({...form, data_pagamento: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" />
               </div>
-              <div>
+              <div className="col-span-2">
                 <label className="text-xs text-slate-400">Categoria</label>
                 <select value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1">
                   <option value="">Selecione...</option>
                   {CATEGORIAS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </div>
-              <div>
-                <label className="text-xs text-slate-400">Status</label>
-                <select value={form.status} onChange={e => setForm({...form, status: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1">
-                  <option value="Pendente">⏳ Pendente</option>
-                  <option value="Pago">✅ Pago</option>
-                  <option value="Vencido">🔴 Vencido</option>
-                  <option value="Agendado">📅 Agendado</option>
-                </select>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Nome da Fatura (gerado automaticamente)</label>
+                <input value={gerarNomeFatura(form) || '—'} disabled className="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700 text-slate-400 text-sm mt-1 font-mono" />
               </div>
               <div className="col-span-2">
                 <label className="text-xs text-slate-400">Observações</label>
                 <textarea value={form.observacoes} onChange={e => setForm({...form, observacoes: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" rows="2" />
               </div>
             </div>
+            {form.arquivo_anexado && (
+              <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900">
+                <input id="drive-check" type="checkbox" checked={salvarNoDriveCheck && driveConnected} disabled={!driveConnected} onChange={e => setSalvarNoDriveCheck(e.target.checked)} className="accent-brand-600" />
+                <label htmlFor="drive-check" className={'text-sm flex-1 ' + (driveConnected ? 'text-slate-200 cursor-pointer' : 'text-slate-500')}>
+                  ☁️ Salvar arquivo no Google Drive
+                </label>
+                {!driveConnected && (
+                  <button type="button" onClick={() => { setShowConfig(true); }} className="text-xs text-brand-400 hover:text-brand-300">Configurar</button>
+                )}
+              </div>
+            )}
             <div className="flex gap-2 mt-4">
-              <button onClick={salvarFatura} className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium bg-brand-600 hover:bg-brand-500">{editando ? 'Atualizar' : 'Salvar Fatura'}</button>
-              <button onClick={() => { resetForm(); setShowForm(false); setEditando(null); }} className="px-4 py-2.5 rounded-lg text-sm bg-slate-700 hover:bg-slate-600">Cancelar</button>
+              <button onClick={salvarFatura} disabled={salvandoDrive} className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium text-white bg-brand-gradient btn-orange-glow disabled:opacity-60">
+                {salvandoDrive ? '☁️ Enviando ao Drive...' : (editando ? 'Atualizar' : 'Salvar Fatura')}
+              </button>
+              <button onClick={() => { resetForm(); setShowForm(false); setEditando(null); }} disabled={salvandoDrive} className="px-4 py-2.5 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 disabled:opacity-50">Cancelar</button>
             </div>
-            {lendoIA && <p className="text-brand-400 text-xs mt-2 animate-pulse">🤖 IA lendo o documento...</p>}
           </div>
         </div>
       )}
@@ -618,12 +855,12 @@ function App() {
               <p className="text-2xl font-bold text-white">{fmt(totalDRE)}</p>
             </div>
             <div className="bg-slate-800 rounded-xl p-4">
-              <p className="text-xs text-slate-400">Pago</p>
-              <p className="text-2xl font-bold text-green-400">{fmt(totalPagoDRE)}</p>
+              <p className="text-xs text-slate-400">Faturas</p>
+              <p className="text-2xl font-bold text-white">{faturasDRE.length}</p>
             </div>
             <div className="bg-slate-800 rounded-xl p-4">
-              <p className="text-xs text-slate-400">Pendente</p>
-              <p className="text-2xl font-bold text-yellow-400">{fmt(totalPendenteDRE)}</p>
+              <p className="text-xs text-slate-400">Categorias usadas</p>
+              <p className="text-2xl font-bold text-white">{categoriasUsadas}<span className="text-sm text-slate-500"> / {totalCategorias}</span></p>
             </div>
           </div>
 
@@ -640,31 +877,25 @@ function App() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-slate-400 text-xs border-b border-slate-700">
-                      <th className="p-3">Fatura</th>
                       <th className="p-3">Fornecedor</th>
+                      <th className="p-3">Categoria</th>
                       <th className="p-3 text-right">Valor</th>
                       <th className="p-3">Data DRE</th>
-                      <th className="p-3">Status</th>
                       <th className="p-3">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {faturasDRE.map(f => (
                       <tr key={f.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                        <td className="p-3 text-white font-medium">{f.nome}</td>
-                        <td className="p-3 text-slate-300">{f.fornecedor}</td>
+                        <td className="p-3 text-white font-medium">{f.fornecedor}</td>
+                        <td className="p-3 text-slate-300 text-xs">{(f.categoria || '').split('(')[0].trim()}</td>
                         <td className="p-3 text-right font-mono text-white">{fmt(f.valor)}</td>
                         <td className="p-3 text-slate-300">{fmtData(f.data_dre)}</td>
                         <td className="p-3">
-                          <button onClick={() => toggleStatus(f)} className={'px-2 py-0.5 rounded text-xs font-medium ' + 
-                            (f.status === 'Pago' ? 'bg-green-900 text-green-300' : 
-                             f.status === 'Vencido' ? 'bg-red-900 text-red-300' :
-                             f.status === 'Agendado' ? 'bg-blue-900 text-blue-300' : 'bg-yellow-900 text-yellow-300')}>
-                            {f.status}
-                          </button>
-                        </td>
-                        <td className="p-3">
                           <div className="flex gap-1">
+                            {f.drive_link && (
+                              <a href={f.drive_link} target="_blank" rel="noopener" title="Abrir no Drive" className="px-2 py-1 rounded text-xs bg-blue-900 hover:bg-blue-800">☁️</a>
+                            )}
                             <button onClick={() => editar(f)} className="px-2 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600">✏️</button>
                             <button onClick={() => excluir(f)} className="px-2 py-1 rounded text-xs bg-red-900 hover:bg-red-800">🗑️</button>
                           </div>
@@ -688,7 +919,7 @@ function App() {
               <input type="number" value={saldoInput} onChange={e => setSaldoInput(e.target.value)} className="text-2xl font-bold text-white bg-transparent w-full outline-none" placeholder="0" />
             </div>
             <div className="bg-slate-800 rounded-xl p-4">
-              <p className="text-xs text-slate-400">A Pagar</p>
+              <p className="text-xs text-slate-400">Total no período</p>
               <p className="text-2xl font-bold text-red-400">{fmt(aPagarCaixa)}</p>
             </div>
             <div className="bg-slate-800 rounded-xl p-4">
@@ -747,31 +978,25 @@ function App() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-slate-400 text-xs border-b border-slate-700">
-                      <th className="p-3">Fatura</th>
                       <th className="p-3">Fornecedor</th>
+                      <th className="p-3">Categoria</th>
                       <th className="p-3 text-right">Valor</th>
                       <th className="p-3">Pagamento</th>
-                      <th className="p-3">Status</th>
                       <th className="p-3">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {faturasCaixa.map(f => (
                       <tr key={f.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                        <td className="p-3 text-white font-medium">{f.nome}</td>
-                        <td className="p-3 text-slate-300">{f.fornecedor}</td>
+                        <td className="p-3 text-white font-medium">{f.fornecedor}</td>
+                        <td className="p-3 text-slate-300 text-xs">{(f.categoria || '').split('(')[0].trim()}</td>
                         <td className="p-3 text-right font-mono text-white">{fmt(f.valor)}</td>
                         <td className="p-3 text-slate-300">{fmtData(f.data_pagamento)}</td>
                         <td className="p-3">
-                          <button onClick={() => toggleStatus(f)} className={'px-2 py-0.5 rounded text-xs font-medium ' + 
-                            (f.status === 'Pago' ? 'bg-green-900 text-green-300' : 
-                             f.status === 'Vencido' ? 'bg-red-900 text-red-300' :
-                             f.status === 'Agendado' ? 'bg-blue-900 text-blue-300' : 'bg-yellow-900 text-yellow-300')}>
-                            {f.status}
-                          </button>
-                        </td>
-                        <td className="p-3">
                           <div className="flex gap-1">
+                            {f.drive_link && (
+                              <a href={f.drive_link} target="_blank" rel="noopener" title="Abrir no Drive" className="px-2 py-1 rounded text-xs bg-blue-900 hover:bg-blue-800">☁️</a>
+                            )}
                             <button onClick={() => editar(f)} className="px-2 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600">✏️</button>
                             <button onClick={() => excluir(f)} className="px-2 py-1 rounded text-xs bg-red-900 hover:bg-red-800">🗑️</button>
                           </div>
@@ -788,7 +1013,7 @@ function App() {
 
       {/* Footer */}
       <div className="text-center text-xs text-slate-600 pt-4 pb-2">
-        FinancialS v4 • {faturas.length} faturas cadastradas • {faturas.filter(f => f.status === 'Pago').length} pagas • Dados salvos no navegador
+        FinancialS v4 • {faturas.length} faturas cadastradas • Dados salvos no navegador
       </div>
     </div>
   );
