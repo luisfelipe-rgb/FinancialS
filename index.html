@@ -163,7 +163,7 @@ const DEFAULT_CLIENT_ID = '685757864448-91bgfjui854sc0g3jj4tsnsh9qpg889c.apps.go
 const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE_FOLDER_NAME = 'FinancialS';
 let tokenClient = null;
-let folderIdCache = null;
+const folderIdCache = new Map();
 
 function getStoredToken() {
   try {
@@ -184,7 +184,7 @@ function setStoredToken(token, expiresInSec) {
 
 function clearStoredToken() {
   sessionStorage.removeItem('drive_token');
-  folderIdCache = null;
+  folderIdCache.clear();
 }
 
 function requestDriveToken(clientId, { prompt = '' } = {}) {
@@ -213,22 +213,30 @@ async function getDriveToken(clientId, { interactive = false } = {}) {
   return await requestDriveToken(clientId, { prompt: interactive ? 'consent' : '' });
 }
 
-async function ensureDriveFolder(token) {
-  if (folderIdCache) return folderIdCache;
-  const q = `name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+async function findOrCreateFolder(token, name, parentId) {
+  const key = `${parentId}/${name}`;
+  if (folderIdCache.has(key)) return folderIdCache.get(key);
+  const q = `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
   const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
     headers: { Authorization: 'Bearer ' + token }
   });
   const searchData = await searchRes.json();
-  if (searchData.files?.length) { folderIdCache = searchData.files[0].id; return folderIdCache; }
+  if (searchData.files?.length) { folderIdCache.set(key, searchData.files[0].id); return searchData.files[0].id; }
   const createRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' })
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] })
   });
   const created = await createRes.json();
-  folderIdCache = created.id;
-  return folderIdCache;
+  if (!created.id) throw new Error(created?.error?.message || 'Falha ao criar pasta');
+  folderIdCache.set(key, created.id);
+  return created.id;
+}
+
+async function ensureDriveFolder(token, subfolder) {
+  const rootId = await findOrCreateFolder(token, DRIVE_FOLDER_NAME, 'root');
+  if (!subfolder) return rootId;
+  return await findOrCreateFolder(token, subfolder, rootId);
 }
 
 function base64ToBlob(base64, mimeType) {
@@ -255,14 +263,15 @@ async function uploadFileToDrive(token, folderId, fileName, blob) {
 
 async function salvarFaturaNoDrive(clientId, fatura) {
   const token = await getDriveToken(clientId);
-  const folderId = await ensureDriveFolder(token);
+  const mesSub = (fatura.data_dre || new Date().toISOString().split('T')[0]).substring(0, 7);
+  const folderId = await ensureDriveFolder(token, mesSub);
   const anexo = fatura.arquivo_anexado;
   if (!anexo?.base64) throw new Error('Arquivo não anexado');
   const ext = (anexo.name?.split('.').pop() || 'pdf').toLowerCase();
   const nomeArquivo = `${fatura.nome || 'fatura'}.${ext}`.replace(/[/\\:*?"<>|]/g, '_');
   const blob = base64ToBlob(anexo.base64, anexo.mimeType);
   const result = await uploadFileToDrive(token, folderId, nomeArquivo, blob);
-  return result;
+  return { ...result, folder: mesSub };
 }
 
 // ===== EXPORT EXCEL =====
@@ -584,7 +593,7 @@ function App() {
         const result = await salvarFaturaNoDrive(clientId, fatura);
         fatura.drive_file_id = result.id;
         fatura.drive_link = result.webViewLink;
-        showToast('☁️ Salvo no Drive: ' + result.name);
+        showToast('☁️ Salvo no Drive: FinancialS/' + result.folder + '/' + result.name);
       } catch (e) {
         showToast('Erro Drive: ' + (e.message || 'falha no upload'), 'error');
         if (String(e.message || '').toLowerCase().includes('token')) setDriveConnected(false);
@@ -727,7 +736,7 @@ function App() {
                 )}
               </div>
               {driveConnected && (
-                <p className="text-xs text-slate-400">Arquivos são salvos na pasta <code className="bg-slate-900 px-1 rounded">FinancialS</code> do seu Drive. A app só vê arquivos que ela mesma criou (scope <code>drive.file</code>).</p>
+                <p className="text-xs text-slate-400">Arquivos são salvos em <code className="bg-slate-900 px-1 rounded">FinancialS/YYYY-MM/</code> do seu Drive, organizados pelo mês de competência. A app só vê arquivos que ela mesma criou (scope <code>drive.file</code>).</p>
               )}
             </div>
 
