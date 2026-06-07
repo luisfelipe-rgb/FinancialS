@@ -270,7 +270,9 @@ async function uploadFileToDrive(token, folderId, fileName, blob) {
 
 async function salvarFaturaNoDrive(clientId, fatura, sharedFolderId) {
   const token = await getDriveToken(clientId);
-  const mesSub = (fatura.data_dre || new Date().toISOString().split('T')[0]).substring(0, 7);
+  const dataDre = fatura.data_dre || new Date().toISOString().split('T')[0];
+  const [ano, mes] = dataDre.split('-');
+  const mesSub = `${mes}_${ano}`;
   const folderId = await ensureDriveFolder(token, mesSub, sharedFolderId);
   const anexo = fatura.arquivo_anexado;
   if (!anexo?.base64) throw new Error('Arquivo não anexado');
@@ -755,12 +757,9 @@ function App() {
                 )}
               </div>
               {driveConnected && (
-                <p className="text-xs text-slate-400">
-                  {sharedFolderId
-                    ? <>Arquivos vão para a <b>pasta compartilhada</b>, organizados em subpastas <code className="bg-slate-900 px-1 rounded">YYYY-MM/</code> pelo mês de competência.</>
-                    : <>Arquivos vão para <code className="bg-slate-900 px-1 rounded">FinancialS/YYYY-MM/</code> no <b>seu Drive pessoal</b>. Configure uma Pasta Compartilhada acima para centralizar.</>
-                  }
-                </p>
+                sharedFolderId
+                  ? <p className="text-xs text-green-400">✓ Arquivos vão para a <b>pasta compartilhada</b>, organizados em subpastas <code className="bg-slate-900 px-1 rounded">MM_YYYY/</code> pelo mês de competência — toda a equipe vê os mesmos arquivos.</p>
+                  : <p className="text-xs text-yellow-400">⚠️ Sem pasta compartilhada configurada — arquivos vão para o <b>seu Drive pessoal</b> e <b>não serão visíveis para a equipe</b>. Cole o ID acima para centralizar.</p>
               )}
             </div>
 
