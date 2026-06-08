@@ -161,6 +161,7 @@ function showToast(msg, tipo = 'success') {
 // ===== GOOGLE DRIVE =====
 const DEFAULT_CLIENT_ID = '685757864448-91bgfjui854sc0g3jj4tsnsh9qpg889c.apps.googleusercontent.com';
 const DEFAULT_SHARED_FOLDER_ID = '1wBukIQbqTMC4xB5fZptEIYDKwfNfCQFv';
+const DEFAULT_SPREADSHEET_ID = '1jeIORzubQQcrziNBw3pwmg1m2qsFlV4SEWgUJHW7hl4';
 const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets';
 const DRIVE_FOLDER_NAME = 'FinancialS';
 const SCOPE_VERSION = 'v3-sheets'; // bump if scope changes, força re-auth
@@ -328,6 +329,44 @@ async function saveFaturasToDrive(token, fileId, data) {
 }
 
 // ===== PLANILHA COMPARTILHADA (Google Sheets) =====
+async function ensureSpreadsheetStructure(token, spreadsheetId) {
+  // Garante que: (a) a primeira aba se chama "Faturas"; (b) a linha 1 tem o cabeçalho esperado.
+  const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(sheetId,title,index)`, {
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  if (!metaRes.ok) {
+    const err = await metaRes.json().catch(() => ({}));
+    throw new Error(err?.error?.message || 'Sem acesso à planilha (HTTP ' + metaRes.status + ')');
+  }
+  const meta = await metaRes.json();
+  const first = (meta.sheets || []).sort((a,b) => (a.properties.index||0) - (b.properties.index||0))[0]?.properties;
+  if (!first) throw new Error('Planilha sem abas');
+
+  if (first.title !== SHEET_NAME) {
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests: [{ updateSheetProperties: { properties: { sheetId: first.sheetId, title: SHEET_NAME }, fields: 'title' } }] })
+    });
+  }
+
+  // Cabeçalho
+  const lastCol = colLetter(SHEET_COLUMNS.length);
+  const headerRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:${lastCol}1`, {
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  const headerData = await headerRes.json();
+  const existing = headerData.values?.[0] || [];
+  const ok = SHEET_COLUMNS.every((c, i) => existing[i] === c);
+  if (!ok) {
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A1:${lastCol}1?valueInputOption=RAW`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values: [SHEET_COLUMNS] })
+    });
+  }
+}
+
 async function findOrCreateSpreadsheet(token, parentFolderId) {
   const q = `name='${SHEET_FILE_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and '${parentFolderId}' in parents and trashed=false`;
   const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
@@ -798,7 +837,7 @@ function App() {
   const [lendoIA, setLendoIA] = useState(false);
   const [salvandoDrive, setSalvandoDrive] = useState(false);
   const [anexos, setAnexos] = useState([]);
-  const [dataFileId, setDataFileId] = useState(null);
+  const [dataFileId, setDataFileId] = useState(() => DEFAULT_SPREADSHEET_ID || null);
   const [sincronizando, setSincronizando] = useState(false);
   const [ultimaSincr, setUltimaSincr] = useState(null);
   const fileInputRef = useRef(null);
@@ -820,8 +859,14 @@ function App() {
     setSincronizando(true);
     try {
       const token = await getDriveToken(clientId);
-      const sheet = dataFileId ? { id: dataFileId, created: false } : await findOrCreateSpreadsheet(token, sharedFolderId);
-      if (!dataFileId) setDataFileId(sheet.id);
+      let sheet;
+      if (dataFileId) {
+        await ensureSpreadsheetStructure(token, dataFileId);
+        sheet = { id: dataFileId, created: false };
+      } else {
+        sheet = await findOrCreateSpreadsheet(token, sharedFolderId);
+        setDataFileId(sheet.id);
+      }
 
       const remoto = await loadFaturasFromSheet(token, sheet.id);
       const local = DB;
