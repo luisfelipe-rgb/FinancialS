@@ -261,6 +261,69 @@ function base64ToBlob(base64, mimeType) {
   return new Blob([arr], { type: mimeType || 'application/octet-stream' });
 }
 
+const DATA_FILE_NAME = '_faturas.json';
+
+async function findOrCreateDataFile(token, parentFolderId) {
+  const q = `name='${DATA_FILE_NAME}' and '${parentFolderId}' in parents and trashed=false`;
+  const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  const data = await searchRes.json();
+  if (data.files?.length) return data.files[0].id;
+  const metadata = { name: DATA_FILE_NAME, parents: [parentFolderId], mimeType: 'application/json' };
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', new Blob([JSON.stringify({ faturas: [], saldoCaixa: 0 })], { type: 'application/json' }));
+  const createRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token },
+    body: form
+  });
+  const created = await createRes.json();
+  if (!created.id) throw new Error(created?.error?.message || 'Falha ao criar arquivo de dados');
+  return created.id;
+}
+
+async function loadFaturasFromDrive(token, fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  if (!res.ok) throw new Error('Falha ao baixar dados (HTTP ' + res.status + ')');
+  const text = await res.text();
+  if (!text.trim()) return { faturas: [], saldoCaixa: 0 };
+  return JSON.parse(text);
+}
+
+function stripFaturasForSync(data) {
+  return {
+    ...data,
+    faturas: (data.faturas || []).map(f => {
+      const { arquivo_anexado, ...rest } = f;
+      // mantém só nome/mime do anexo no JSON central, dropa base64
+      return {
+        ...rest,
+        arquivo_anexado: arquivo_anexado
+          ? { name: arquivo_anexado.name, mimeType: arquivo_anexado.mimeType }
+          : null
+      };
+    })
+  };
+}
+
+async function saveFaturasToDrive(token, fileId, data) {
+  const payload = stripFaturasForSync(data);
+  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+    method: 'PATCH',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload, null, 2)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || 'Falha ao salvar dados (HTTP ' + res.status + ')');
+  }
+  return await res.json();
+}
+
 async function deleteDriveFile(token, fileId) {
   const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
     method: 'DELETE',
@@ -633,6 +696,9 @@ function App() {
   const [lendoIA, setLendoIA] = useState(false);
   const [salvandoDrive, setSalvandoDrive] = useState(false);
   const [anexos, setAnexos] = useState([]);
+  const [dataFileId, setDataFileId] = useState(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [ultimaSincr, setUltimaSincr] = useState(null);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -645,6 +711,52 @@ function App() {
     else localStorage.removeItem('drive_shared_folder_id');
     folderIdCache.clear();
   }, [sharedFolderId]);
+
+  // ===== SYNC COM JSON COMPARTILHADO NO DRIVE =====
+  const sincronizarDoDrive = useCallback(async (opts = {}) => {
+    if (!driveConnected || !sharedFolderId || !clientId) return;
+    setSincronizando(true);
+    try {
+      const token = await getDriveToken(clientId);
+      const fileId = dataFileId || await findOrCreateDataFile(token, sharedFolderId);
+      if (!dataFileId) setDataFileId(fileId);
+      const remoto = await loadFaturasFromDrive(token, fileId);
+      const local = DB;
+      // Migração: se remoto está vazio mas local tem dados, sobe local pro Drive
+      if ((!remoto.faturas || remoto.faturas.length === 0) && local.faturas?.length > 0) {
+        await saveFaturasToDrive(token, fileId, local);
+        if (opts.toast) showToast('☁️ Dados locais migrados para o Drive');
+      } else {
+        DB = { ...remoto, saldoCaixa: remoto.saldoCaixa ?? local.saldoCaixa ?? 0 };
+        saveData(DB);
+        if (opts.toast) showToast('☁️ Sincronizado: ' + DB.faturas.length + ' faturas');
+      }
+      setUltimaSincr(new Date());
+      refresh();
+    } catch (e) {
+      showToast('⚠️ Falha ao sincronizar: ' + (e.message || ''), 'error');
+    }
+    setSincronizando(false);
+  }, [driveConnected, sharedFolderId, clientId, dataFileId]);
+
+  const salvarNoCompartilhado = useCallback(async () => {
+    if (!driveConnected || !sharedFolderId || !clientId || !dataFileId) return;
+    try {
+      const token = await getDriveToken(clientId);
+      await saveFaturasToDrive(token, dataFileId, DB);
+      setUltimaSincr(new Date());
+    } catch (e) {
+      showToast('⚠️ Falha ao gravar no Drive: ' + (e.message || ''), 'error');
+    }
+  }, [driveConnected, sharedFolderId, clientId, dataFileId]);
+
+  // Carga inicial e on-focus
+  useEffect(() => { sincronizarDoDrive(); }, [sincronizarDoDrive]);
+  useEffect(() => {
+    const h = () => sincronizarDoDrive();
+    window.addEventListener('focus', h);
+    return () => window.removeEventListener('focus', h);
+  }, [sincronizarDoDrive]);
 
   const conectarDrive = async () => {
     if (!clientId) { showToast('⚠️ Configure o Client ID primeiro', 'error'); return; }
@@ -753,13 +865,15 @@ function App() {
       criado_em: editando?.criado_em || new Date().toISOString()
     };
 
-    const deveSalvarDrive = driveConnected && salvarNoDriveCheck && fatura.arquivo_anexado && !fatura.drive_file_id;
+    const deveSalvarDrive = driveConnected && salvarNoDriveCheck && fatura.arquivo_anexado?.base64 && !fatura.drive_file_id;
     if (deveSalvarDrive) {
       setSalvandoDrive(true);
       try {
         const result = await salvarFaturaNoDrive(clientId, fatura, sharedFolderId);
         fatura.drive_file_id = result.id;
         fatura.drive_link = result.webViewLink;
+        // Drop base64 — o arquivo já está no Drive, não precisa duplicar no localStorage
+        fatura.arquivo_anexado = { name: fatura.arquivo_anexado.name, mimeType: fatura.arquivo_anexado.mimeType };
         showToast('☁️ Salvo no Drive: FinancialS/' + result.folder + '/' + result.name);
       } catch (e) {
         showToast('Erro Drive: ' + (e.message || 'falha no upload'), 'error');
@@ -793,6 +907,7 @@ function App() {
       showToast(deveSalvarDrive ? '✅ Salvo localmente + Drive!' : '✅ Fatura cadastrada!');
     }
     saveData(DB);
+    await salvarNoCompartilhado();
     resetForm();
     setShowForm(false);
     refresh();
@@ -835,6 +950,7 @@ function App() {
     }
     DB.faturas = DB.faturas.filter(f => f.id !== item.id);
     saveData(DB);
+    await salvarNoCompartilhado();
     refresh();
   };
 
@@ -886,6 +1002,11 @@ function App() {
           <p className="text-xs text-slate-400">Organizador Financeiro — DRE + Fluxo de Caixa</p>
         </div>
         <div className="flex gap-2 items-center">
+          {driveConnected && (
+            <button onClick={() => sincronizarDoDrive({toast: true})} disabled={sincronizando} title={ultimaSincr ? 'Última sync: ' + ultimaSincr.toLocaleTimeString('pt-BR') : 'Sincronizar com a equipe'} className="px-2.5 py-1.5 rounded-lg text-xs bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-60">
+              {sincronizando ? '⟳ Sincronizando...' : '⟳ Sync'}
+            </button>
+          )}
           <button onClick={() => setShowConfig(true)} className="px-3 py-1.5 rounded-lg text-xs bg-slate-700 text-slate-300 hover:bg-slate-600 flex items-center gap-1.5">
             <span className={'w-1.5 h-1.5 rounded-full ' + (driveConnected ? 'bg-green-400' : 'bg-slate-500')}></span>
             ☁️ Drive
