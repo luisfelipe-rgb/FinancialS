@@ -94,8 +94,10 @@ const CATEGORIAS = [
   { value: 'Seguros', label: '🛡️ Seguros (D&O, cyber, RC)' },
   { value: 'Viagens e Deslocamentos', label: '✈️ Viagens e Deslocamentos' },
   { value: 'Despesas Administrativas', label: '📋 Despesas Administrativas (materiais, correio, cartório)' },
-  { value: 'Impostos e Taxas Regulatórias', label: '🏛️ Impostos e Taxas Regulatórias (Taxa Social, IRPJ, etc.)' },
+  { value: 'Impostos', label: '🏦 Impostos (IRPJ, CSLL, PIS, COFINS, ISS, etc.)' },
+  { value: 'Impostos e Taxas Regulatórias', label: '🏛️ Impostos e Taxas Regulatórias (Taxa Social, etc.)' },
   { value: 'Licenças Regulatórias', label: '📜 Licenças Regulatórias (SENARC, taxas de operação)' },
+  { value: 'Reembolso', label: '↩️ Reembolso' },
   { value: 'Contingência / Reserva', label: '💰 Contingência / Reserva' }
 ];
 
@@ -114,7 +116,9 @@ function sugerirCategoria(nome, fornecedor) {
   if (/(afiliado|afiliação)/.test(txt)) return 'Afiliados';
   if (/(branding|evento|gráfica|patrocínio|material gráfico)/.test(txt)) return 'Marketing e Branding';
   if (/(\bngx\b|plataforma|provedor de jogos)/.test(txt)) return 'Plataforma e Licenças';
-  if (/(imposto|irpj|csll|\bpis\b|cofins|\biss\b)/.test(txt)) return 'Impostos e Taxas Regulatórias';
+  if (/(reembols|ressarcimento|reimbursement)/.test(txt)) return 'Reembolso';
+  if (/(taxa social|taxa regul)/.test(txt)) return 'Impostos e Taxas Regulatórias';
+  if (/(imposto|irpj|csll|\bpis\b|cofins|\biss\b|inss patronal|darf)/.test(txt)) return 'Impostos';
   if (/(senarc|licen[çc]a regul|taxa de operação)/.test(txt)) return 'Licenças Regulatórias';
   if (/(correio|cartório|sedex|tabelião)/.test(txt)) return 'Despesas Administrativas';
   return '';
