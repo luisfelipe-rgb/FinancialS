@@ -171,7 +171,7 @@ const DRIVE_FOLDER_NAME = 'FinancialS';
 const SCOPE_VERSION = 'v3-sheets'; // bump if scope changes, força re-auth
 const SHEET_NAME = 'Faturas';
 const SHEET_FILE_NAME = 'FinancialS - Faturas';
-const SHEET_COLUMNS = ['id','nome','fornecedor','valor','data_dre','data_pagamento','categoria','moeda_original','valor_original','taxa_ptax','drive_file_id','drive_link','arquivo_nome','observacoes','criado_em','saldoCaixa','status'];
+const SHEET_COLUMNS = ['id','nome','fornecedor','valor','data_dre','data_pagamento','categoria','moeda_original','valor_original','taxa_ptax','drive_file_id','drive_link','arquivo_nome','observacoes','criado_em','saldoCaixa','status','centro_custo','comprovante_drive_file_id','comprovante_drive_link','comprovante_arquivo_nome'];
 let tokenClient = null;
 const folderIdCache = new Map();
 
@@ -503,10 +503,16 @@ function monthSubfolderName(dataIso) {
   return `${month}_${year}`;
 }
 
-function driveFileNameFor(fatura) {
-  const ext = (fatura.arquivo_anexado?.name?.split('.').pop() || fatura.arquivo_nome?.split('.').pop() || 'pdf').toLowerCase();
-  return `${fatura.nome || 'fatura'}.${ext}`.replace(/[/\\:*?"<>|]/g, '_');
+function driveFileNameFor(fatura, kind = 'fatura') {
+  const anexoField = kind === 'comprovante' ? 'comprovante_anexado' : 'arquivo_anexado';
+  const nomeField = kind === 'comprovante' ? 'comprovante_arquivo_nome' : 'arquivo_nome';
+  const anexo = fatura[anexoField];
+  const ext = (anexo?.name?.split('.').pop() || fatura[nomeField]?.split('.').pop() || 'pdf').toLowerCase();
+  const suffix = kind === 'comprovante' ? '_comprovante' : '';
+  return `${fatura.nome || 'fatura'}${suffix}.${ext}`.replace(/[/\\:*?"<>|]/g, '_');
 }
+
+const DRIVE_TYPE_FOLDER = { fatura: 'Faturas', comprovante: 'Comprovantes' };
 
 async function uploadFileToDrive(token, folderId, fileName, blob) {
   const metadata = { name: fileName, parents: [folderId] };
@@ -523,22 +529,33 @@ async function uploadFileToDrive(token, folderId, fileName, blob) {
   return data;
 }
 
-async function salvarFaturaNoDrive(clientId, fatura, sharedFolderId) {
+async function ensureTypedDriveFolder(token, kind, mesSub, sharedFolderId) {
+  // Estrutura nova: SharedFolder / Faturas|Comprovantes / MM_YYYY
+  const typeFolder = DRIVE_TYPE_FOLDER[kind];
+  if (!sharedFolderId) return await ensureDriveFolder(token, mesSub, sharedFolderId); // fallback antigo
+  const typeId = await findOrCreateFolder(token, typeFolder, sharedFolderId);
+  return await findOrCreateFolder(token, mesSub, typeId);
+}
+
+async function salvarArquivoNoDrive(clientId, fatura, kind, sharedFolderId) {
+  const anexoField = kind === 'comprovante' ? 'comprovante_anexado' : 'arquivo_anexado';
+  const anexo = fatura[anexoField];
+  if (!anexo?.base64) throw new Error('Arquivo ' + kind + ' não anexado');
   const token = await getDriveToken(clientId);
   const dataDre = fatura.data_dre || new Date().toISOString().split('T')[0];
   const mesSub = monthSubfolderName(dataDre);
-  const folderId = await ensureDriveFolder(token, mesSub, sharedFolderId);
-  const anexo = fatura.arquivo_anexado;
-  if (!anexo?.base64) throw new Error('Arquivo não anexado');
-  const nomeArquivo = driveFileNameFor(fatura);
+  const folderId = await ensureTypedDriveFolder(token, kind, mesSub, sharedFolderId);
+  const nomeArquivo = driveFileNameFor(fatura, kind);
   const blob = base64ToBlob(anexo.base64, anexo.mimeType);
   const result = await uploadFileToDrive(token, folderId, nomeArquivo, blob);
-  return { ...result, folder: mesSub };
+  return { ...result, folder: `${DRIVE_TYPE_FOLDER[kind]}/${mesSub}` };
 }
 
-async function sincronizarFaturaNoDrive(clientId, novaFatura, faturaAntiga, sharedFolderId) {
-  const novoNome = driveFileNameFor(novaFatura);
-  const antigoNome = driveFileNameFor(faturaAntiga);
+async function sincronizarArquivoNoDrive(clientId, novaFatura, faturaAntiga, kind, sharedFolderId) {
+  const idField = kind === 'comprovante' ? 'comprovante_drive_file_id' : 'drive_file_id';
+  if (!novaFatura[idField]) return null;
+  const novoNome = driveFileNameFor(novaFatura, kind);
+  const antigoNome = driveFileNameFor(faturaAntiga, kind);
   const novoMes = monthSubfolderName(novaFatura.data_dre);
   const antigoMes = monthSubfolderName(faturaAntiga.data_dre);
   const precisaRenomear = novoNome !== antigoNome;
@@ -548,10 +565,10 @@ async function sincronizarFaturaNoDrive(clientId, novaFatura, faturaAntiga, shar
   const opts = {};
   if (precisaRenomear) opts.newName = novoNome;
   if (precisaMover) {
-    opts.addParent = await ensureDriveFolder(token, novoMes, sharedFolderId);
-    opts.removeParent = await ensureDriveFolder(token, antigoMes, sharedFolderId);
+    opts.addParent = await ensureTypedDriveFolder(token, kind, novoMes, sharedFolderId);
+    opts.removeParent = await ensureTypedDriveFolder(token, kind, antigoMes, sharedFolderId);
   }
-  return await updateDriveFile(token, novaFatura.drive_file_id, opts);
+  return await updateDriveFile(token, novaFatura[idField], opts);
 }
 
 // ===== EXPORT EXCEL =====
@@ -560,6 +577,7 @@ function exportarExcel(linhas, prefixo) {
   const dados = linhas.map(f => ({
     Fatura: f.nome || '',
     Fornecedor: f.fornecedor || '',
+    'Centro de Custo': f.centro_custo || '',
     'Valor (R$)': f.valor || 0,
     'Moeda Original': f.moeda_original || 'BRL',
     'Valor Original': f.valor_original || '',
@@ -567,12 +585,15 @@ function exportarExcel(linhas, prefixo) {
     'Data DRE': f.data_dre ? fmtData(f.data_dre) : '',
     'Data Pagamento': f.data_pagamento ? fmtData(f.data_pagamento) : '',
     Categoria: f.categoria || '',
+    Status: f.status || 'Pendente',
+    'Link Fatura': f.drive_link || '',
+    'Link Comprovante': f.comprovante_drive_link || '',
     Observações: f.observacoes || ''
   }));
   const ws = XLSX.utils.json_to_sheet(dados);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Faturas');
-  ws['!cols'] = [{wch:35},{wch:22},{wch:15},{wch:8},{wch:14},{wch:10},{wch:14},{wch:16},{wch:18},{wch:30}];
+  ws['!cols'] = [{wch:35},{wch:22},{wch:18},{wch:15},{wch:8},{wch:14},{wch:10},{wch:14},{wch:16},{wch:18},{wch:12},{wch:50},{wch:50},{wch:30}];
   XLSX.writeFile(wb, `${prefixo}_${new Date().toISOString().split('T')[0]}.xlsx`);
   showToast('✅ Excel baixado!');
 }
@@ -942,7 +963,9 @@ function App() {
 
   const [form, setForm] = useState({
     fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
-    categoria: '', status: 'Pendente', observacoes: '', arquivo_nome: '', arquivo_anexado: null,
+    categoria: '', status: 'Pendente', centro_custo: '',
+    observacoes: '', arquivo_nome: '', arquivo_anexado: null,
+    comprovante_arquivo_nome: '', comprovante_anexado: null,
     moeda_original: '', valor_original: '', taxa_ptax: ''
   });
   const [tick, setTick] = useState(0);
@@ -961,7 +984,9 @@ function App() {
 
   const resetForm = () => setForm({
     fornecedor: '', valor: '', data_dre: '', data_pagamento: '',
-    categoria: '', status: 'Pendente', observacoes: '', arquivo_nome: '', arquivo_anexado: null,
+    categoria: '', status: 'Pendente', centro_custo: '',
+    observacoes: '', arquivo_nome: '', arquivo_anexado: null,
+    comprovante_arquivo_nome: '', comprovante_anexado: null,
     moeda_original: '', valor_original: '', taxa_ptax: ''
   });
 
@@ -1003,6 +1028,24 @@ function App() {
     e.target.value = '';
   };
 
+  const comprovanteInputRef = useRef(null);
+  const handleComprovanteUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const base64 = await fileToBase64(file);
+      setForm(f => ({
+        ...f,
+        comprovante_arquivo_nome: file.name,
+        comprovante_anexado: { name: file.name, base64, mimeType: file.type || 'application/octet-stream' }
+      }));
+      showToast('🧾 Comprovante anexado: ' + file.name);
+    } catch {
+      showToast('Erro ao ler comprovante', 'error');
+    }
+    e.target.value = '';
+  };
+
   // ===== SALVAR FATURA =====
   const salvarFatura = async () => {
     if (!form.fornecedor || !form.valor) {
@@ -1019,47 +1062,66 @@ function App() {
       data_pagamento: form.data_pagamento || '',
       categoria: form.categoria || 'Nao categorizado',
       status: form.status || 'Pendente',
+      centro_custo: form.centro_custo || '',
       observacoes: form.observacoes || '',
       arquivo_nome: form.arquivo_nome || '',
       arquivo_anexado: form.arquivo_anexado || null,
       drive_file_id: editando?.drive_file_id || null,
       drive_link: editando?.drive_link || null,
+      comprovante_arquivo_nome: form.comprovante_arquivo_nome || '',
+      comprovante_anexado: form.comprovante_anexado || null,
+      comprovante_drive_file_id: editando?.comprovante_drive_file_id || null,
+      comprovante_drive_link: editando?.comprovante_drive_link || null,
       moeda_original: form.moeda_original || '',
       valor_original: form.valor_original ? parseFloat(form.valor_original) : '',
       taxa_ptax: form.taxa_ptax ? parseFloat(form.taxa_ptax) : '',
       criado_em: editando?.criado_em || new Date().toISOString()
     };
 
-    const deveSalvarDrive = driveConnected && salvarNoDriveCheck && fatura.arquivo_anexado?.base64 && !fatura.drive_file_id;
-    if (deveSalvarDrive) {
+    const podeUpload = driveConnected && salvarNoDriveCheck;
+    const uploadsParaFazer = [];
+    if (podeUpload && fatura.arquivo_anexado?.base64 && !fatura.drive_file_id) uploadsParaFazer.push('fatura');
+    if (podeUpload && fatura.comprovante_anexado?.base64 && !fatura.comprovante_drive_file_id) uploadsParaFazer.push('comprovante');
+
+    if (uploadsParaFazer.length) {
       setSalvandoDrive(true);
-      try {
-        const result = await salvarFaturaNoDrive(clientId, fatura, sharedFolderId);
-        fatura.drive_file_id = result.id;
-        fatura.drive_link = result.webViewLink;
-        // Drop base64 — o arquivo já está no Drive, não precisa duplicar no localStorage
-        fatura.arquivo_anexado = { name: fatura.arquivo_anexado.name, mimeType: fatura.arquivo_anexado.mimeType };
-        showToast('☁️ Salvo no Drive: ' + result.folder + '/' + result.name);
-      } catch (e) {
-        showToast('Erro Drive: ' + (e.message || 'falha no upload'), 'error');
-        if (String(e.message || '').toLowerCase().includes('token')) setDriveConnected(false);
-        setSalvandoDrive(false);
-        return;
+      for (const kind of uploadsParaFazer) {
+        try {
+          const result = await salvarArquivoNoDrive(clientId, fatura, kind, sharedFolderId);
+          if (kind === 'fatura') {
+            fatura.drive_file_id = result.id;
+            fatura.drive_link = result.webViewLink;
+            fatura.arquivo_anexado = { name: fatura.arquivo_anexado.name, mimeType: fatura.arquivo_anexado.mimeType };
+          } else {
+            fatura.comprovante_drive_file_id = result.id;
+            fatura.comprovante_drive_link = result.webViewLink;
+            fatura.comprovante_anexado = { name: fatura.comprovante_anexado.name, mimeType: fatura.comprovante_anexado.mimeType };
+          }
+          showToast('☁️ ' + result.folder + '/' + result.name);
+        } catch (e) {
+          showToast('Erro Drive (' + kind + '): ' + (e.message || ''), 'error');
+          if (String(e.message || '').toLowerCase().includes('token')) setDriveConnected(false);
+          setSalvandoDrive(false);
+          return;
+        }
       }
       setSalvandoDrive(false);
     }
 
     if (editando) {
-      if (fatura.drive_file_id && driveConnected) {
+      if (driveConnected && (fatura.drive_file_id || fatura.comprovante_drive_file_id)) {
         setSalvandoDrive(true);
-        try {
-          const sync = await sincronizarFaturaNoDrive(clientId, fatura, editando, sharedFolderId);
-          if (sync) {
-            fatura.drive_link = sync.webViewLink || fatura.drive_link;
-            showToast('☁️ Drive atualizado: ' + sync.name);
+        for (const kind of ['fatura', 'comprovante']) {
+          try {
+            const sync = await sincronizarArquivoNoDrive(clientId, fatura, editando, kind, sharedFolderId);
+            if (sync) {
+              if (kind === 'fatura') fatura.drive_link = sync.webViewLink || fatura.drive_link;
+              else fatura.comprovante_drive_link = sync.webViewLink || fatura.comprovante_drive_link;
+              showToast('☁️ Drive (' + kind + '): ' + sync.name);
+            }
+          } catch (e) {
+            showToast('⚠️ Sync ' + kind + ' falhou: ' + (e.message || ''), 'error');
           }
-        } catch (e) {
-          showToast('⚠️ Sync Drive falhou: ' + (e.message || ''), 'error');
         }
         setSalvandoDrive(false);
       }
@@ -1088,6 +1150,9 @@ function App() {
       data_pagamento: item.data_pagamento || '',
       categoria: item.categoria || '',
       status: item.status || 'Pendente',
+      centro_custo: item.centro_custo || '',
+      comprovante_arquivo_nome: item.comprovante_arquivo_nome || '',
+      comprovante_anexado: item.comprovante_anexado || null,
       observacoes: item.observacoes || '',
       moeda_original: item.moeda_original || '',
       valor_original: item.valor_original ? String(item.valor_original) : '',
@@ -1111,15 +1176,16 @@ function App() {
   };
 
   const excluir = async (item) => {
-    const temDrive = item.drive_file_id && driveConnected;
+    const idsParaApagar = [item.drive_file_id, item.comprovante_drive_file_id].filter(Boolean);
+    const temDrive = idsParaApagar.length > 0 && driveConnected;
     const msg = temDrive
-      ? `Excluir "${item.nome}"?\n\n⚠️ O arquivo também será apagado do Google Drive.`
+      ? `Excluir "${item.nome}"?\n\n⚠️ ${idsParaApagar.length} arquivo(s) também serão apagados do Google Drive.`
       : `Excluir "${item.nome}"?`;
     if (!confirm(msg)) return;
     if (temDrive) {
       try {
         const token = await getDriveToken(clientId);
-        await deleteDriveFile(token, item.drive_file_id);
+        for (const id of idsParaApagar) await deleteDriveFile(token, id);
         showToast('🗑️ Excluída (local + Drive)');
       } catch (e) {
         showToast('⚠️ Apagada local — Drive falhou: ' + (e.message || ''), 'error');
@@ -1146,6 +1212,7 @@ function App() {
 
   // Meses disponiveis
   const mesesDRE = [...new Set(faturas.map(f => f.data_dre ? f.data_dre.substring(0,7) : '').filter(Boolean))].sort().reverse();
+  const centrosCustoUsados = [...new Set(faturas.map(f => f.centro_custo).filter(Boolean))].sort();
 
   // Filtro por mes
   const faturasDRE = mesDRE ? faturasFiltradas.filter(f => f.data_dre && f.data_dre.startsWith(mesDRE)) : faturasFiltradas;
@@ -1313,12 +1380,20 @@ function App() {
         <div className="fixed inset-0 bg-black/60 z-30 flex items-start justify-center p-4 pt-10 overflow-auto" onClick={() => !editando && resetForm()}>
           <div className="bg-slate-800 rounded-xl p-5 max-w-lg w-full" onClick={e => e.stopPropagation()}>
             <h2 className="text-lg font-bold mb-4">{editando ? '✏️ Editar Fatura' : '📄 Nova Fatura'}</h2>
-            <div className="mb-4">
-              <input ref={modalFileInputRef} type="file" accept=".pdf,.csv,.xlsx,.xls,.png,.jpg,.jpeg" className="hidden" onChange={handleModalUpload} />
-              <button type="button" onClick={() => modalFileInputRef.current?.click()} className="w-full px-4 py-3 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 border border-dashed border-slate-500 text-slate-200">
-                📎 {form.arquivo_nome ? `Trocar arquivo: ${form.arquivo_nome}` : 'Anexar Fatura (PDF, Excel, CSV) — extrai dados automaticamente'}
-              </button>
-              {lendoIA && <p className="text-brand-400 text-xs mt-2 animate-pulse">🤖 Lendo documento...</p>}
+            <div className="mb-4 space-y-2">
+              <div>
+                <input ref={modalFileInputRef} type="file" accept=".pdf,.csv,.xlsx,.xls,.png,.jpg,.jpeg" className="hidden" onChange={handleModalUpload} />
+                <button type="button" onClick={() => modalFileInputRef.current?.click()} className="w-full px-4 py-3 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 border border-dashed border-slate-500 text-slate-200">
+                  📎 {form.arquivo_nome ? `Fatura: ${form.arquivo_nome}` : 'Anexar Fatura (PDF, Excel, CSV) — extrai dados automaticamente'}
+                </button>
+              </div>
+              <div>
+                <input ref={comprovanteInputRef} type="file" accept=".pdf,.png,.jpg,.jpeg" className="hidden" onChange={handleComprovanteUpload} />
+                <button type="button" onClick={() => comprovanteInputRef.current?.click()} className="w-full px-4 py-3 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 border border-dashed border-slate-500 text-slate-200">
+                  🧾 {form.comprovante_arquivo_nome ? `Comprovante: ${form.comprovante_arquivo_nome}` : 'Anexar Comprovante (opcional)'}
+                </button>
+              </div>
+              {lendoIA && <p className="text-brand-400 text-xs animate-pulse">🤖 Lendo documento...</p>}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -1355,6 +1430,13 @@ function App() {
                   <option value="Vencido">🔴 Vencido</option>
                   <option value="Agendado">📅 Agendado</option>
                 </select>
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Centro de Custo</label>
+                <input list="centros-custo-list" value={form.centro_custo} onChange={e => setForm({...form, centro_custo: e.target.value})} className="w-full px-3 py-2 rounded bg-slate-700 border border-slate-600 text-white text-sm mt-1" placeholder="Ex: Marketing, TI, Operações..." />
+                <datalist id="centros-custo-list">
+                  {centrosCustoUsados.map(cc => <option key={cc} value={cc} />)}
+                </datalist>
               </div>
               <div className="col-span-2">
                 <label className="text-xs text-slate-400">Nome da Fatura (gerado automaticamente)</label>
@@ -1444,7 +1526,10 @@ function App() {
                         <td className="p-3">
                           <div className="flex gap-1">
                             {f.drive_link && (
-                              <a href={f.drive_link} target="_blank" rel="noopener" title="Abrir no Drive" className="px-2 py-1 rounded text-xs bg-blue-900 hover:bg-blue-800">☁️</a>
+                              <a href={f.drive_link} target="_blank" rel="noopener" title="Abrir fatura no Drive" className="px-2 py-1 rounded text-xs bg-blue-900 hover:bg-blue-800">📄</a>
+                            )}
+                            {f.comprovante_drive_link && (
+                              <a href={f.comprovante_drive_link} target="_blank" rel="noopener" title="Abrir comprovante no Drive" className="px-2 py-1 rounded text-xs bg-emerald-900 hover:bg-emerald-800">🧾</a>
                             )}
                             <button onClick={() => editar(f)} className="px-2 py-1 rounded text-xs bg-slate-700 hover:bg-slate-600">✏️</button>
                             <button onClick={() => excluir(f)} className="px-2 py-1 rounded text-xs bg-red-900 hover:bg-red-800">🗑️</button>
