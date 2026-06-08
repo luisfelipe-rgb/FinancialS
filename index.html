@@ -161,9 +161,12 @@ function showToast(msg, tipo = 'success') {
 // ===== GOOGLE DRIVE =====
 const DEFAULT_CLIENT_ID = '685757864448-91bgfjui854sc0g3jj4tsnsh9qpg889c.apps.googleusercontent.com';
 const DEFAULT_SHARED_FOLDER_ID = '1wBukIQbqTMC4xB5fZptEIYDKwfNfCQFv';
-const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive';
+const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets';
 const DRIVE_FOLDER_NAME = 'FinancialS';
-const SCOPE_VERSION = 'v2-drive'; // bump if scope changes, força re-auth
+const SCOPE_VERSION = 'v3-sheets'; // bump if scope changes, força re-auth
+const SHEET_NAME = 'Faturas';
+const SHEET_FILE_NAME = 'FinancialS - Faturas';
+const SHEET_COLUMNS = ['id','nome','fornecedor','valor','data_dre','data_pagamento','categoria','moeda_original','valor_original','taxa_ptax','drive_file_id','drive_link','arquivo_nome','observacoes','criado_em','saldoCaixa'];
 let tokenClient = null;
 const folderIdCache = new Map();
 
@@ -322,6 +325,105 @@ async function saveFaturasToDrive(token, fileId, data) {
     throw new Error(err?.error?.message || 'Falha ao salvar dados (HTTP ' + res.status + ')');
   }
   return await res.json();
+}
+
+// ===== PLANILHA COMPARTILHADA (Google Sheets) =====
+async function findOrCreateSpreadsheet(token, parentFolderId) {
+  const q = `name='${SHEET_FILE_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and '${parentFolderId}' in parents and trashed=false`;
+  const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  const data = await searchRes.json();
+  if (data.files?.length) return { id: data.files[0].id, created: false };
+
+  // Cria via Drive API (já na pasta certa)
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: SHEET_FILE_NAME, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [parentFolderId] })
+  });
+  const created = await createRes.json();
+  if (!created.id) throw new Error(created?.error?.message || 'Falha ao criar planilha');
+
+  // Renomeia a primeira aba para "Faturas" e escreve o cabeçalho
+  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${created.id}:batchUpdate`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requests: [{ updateSheetProperties: { properties: { sheetId: 0, title: SHEET_NAME }, fields: 'title' } }] })
+  });
+  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${created.id}/values/${SHEET_NAME}!A1:${colLetter(SHEET_COLUMNS.length)}1?valueInputOption=RAW`, {
+    method: 'PUT',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values: [SHEET_COLUMNS] })
+  });
+  return { id: created.id, created: true };
+}
+
+function colLetter(n) {
+  let s = '';
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+function rowToFatura(row) {
+  const f = {};
+  SHEET_COLUMNS.forEach((c, i) => { f[c] = row[i] ?? ''; });
+  // tipos numéricos
+  ['valor','valor_original','taxa_ptax','saldoCaixa'].forEach(k => {
+    if (f[k] !== '' && f[k] != null) f[k] = parseFloat(f[k]) || 0;
+  });
+  // arquivo_anexado vira metadata mínima a partir de arquivo_nome (sem base64)
+  if (f.arquivo_nome) f.arquivo_anexado = { name: f.arquivo_nome, mimeType: '' };
+  return f;
+}
+
+function faturaToRow(f) {
+  return SHEET_COLUMNS.map(c => {
+    const v = f[c];
+    if (v === null || v === undefined) return '';
+    return v;
+  });
+}
+
+async function loadFaturasFromSheet(token, spreadsheetId) {
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:${colLetter(SHEET_COLUMNS.length)}?majorDimension=ROWS`, {
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || 'HTTP ' + res.status);
+  }
+  const data = await res.json();
+  const rows = data.values || [];
+  const faturas = rows.map(rowToFatura).filter(f => f.id);
+  // saldoCaixa fica na primeira linha (qualquer linha, pegamos da primeira não vazia)
+  const saldoCaixa = faturas.find(f => f.saldoCaixa)?.saldoCaixa ?? 0;
+  // remove o campo saldoCaixa dos records (ele é "global")
+  faturas.forEach(f => delete f.saldoCaixa);
+  return { faturas, saldoCaixa };
+}
+
+async function saveFaturasToSheet(token, spreadsheetId, db) {
+  const faturas = db.faturas || [];
+  // injeta saldoCaixa só na primeira linha
+  const rows = faturas.map((f, i) => faturaToRow({ ...f, saldoCaixa: i === 0 ? (db.saldoCaixa || 0) : '' }));
+  // limpa o range de dados (linha 2 em diante) e escreve tudo
+  const lastCol = colLetter(SHEET_COLUMNS.length);
+  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2:${lastCol}:clear`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  if (rows.length === 0) return;
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${SHEET_NAME}!A2?valueInputOption=RAW`, {
+    method: 'PUT',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values: rows })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || 'HTTP ' + res.status);
+  }
 }
 
 async function deleteDriveFile(token, fileId) {
@@ -712,20 +814,33 @@ function App() {
     folderIdCache.clear();
   }, [sharedFolderId]);
 
-  // ===== SYNC COM JSON COMPARTILHADO NO DRIVE =====
+  // ===== SYNC COM GOOGLE SHEETS COMPARTILHADO =====
   const sincronizarDoDrive = useCallback(async (opts = {}) => {
     if (!driveConnected || !sharedFolderId || !clientId) return;
     setSincronizando(true);
     try {
       const token = await getDriveToken(clientId);
-      const fileId = dataFileId || await findOrCreateDataFile(token, sharedFolderId);
-      if (!dataFileId) setDataFileId(fileId);
-      const remoto = await loadFaturasFromDrive(token, fileId);
+      const sheet = dataFileId ? { id: dataFileId, created: false } : await findOrCreateSpreadsheet(token, sharedFolderId);
+      if (!dataFileId) setDataFileId(sheet.id);
+
+      const remoto = await loadFaturasFromSheet(token, sheet.id);
       const local = DB;
-      // Migração: se remoto está vazio mas local tem dados, sobe local pro Drive
-      if ((!remoto.faturas || remoto.faturas.length === 0) && local.faturas?.length > 0) {
-        await saveFaturasToDrive(token, fileId, local);
-        if (opts.toast) showToast('☁️ Dados locais migrados para o Drive');
+
+      // Migração #1: planilha nova/vazia → sobe local
+      if (sheet.created || ((!remoto.faturas || remoto.faturas.length === 0) && local.faturas?.length > 0)) {
+        // Tenta também recuperar do JSON antigo (_faturas.json) se ainda existir
+        let dadosParaSubir = local;
+        try {
+          const jsonFileId = await findOrCreateDataFile(token, sharedFolderId);
+          const jsonData = await loadFaturasFromDrive(token, jsonFileId);
+          if (jsonData.faturas?.length > (local.faturas?.length || 0)) dadosParaSubir = jsonData;
+        } catch {}
+        if (dadosParaSubir.faturas?.length > 0) {
+          await saveFaturasToSheet(token, sheet.id, dadosParaSubir);
+          DB = dadosParaSubir;
+          saveData(DB);
+          if (opts.toast) showToast('☁️ ' + DB.faturas.length + ' faturas migradas para a planilha');
+        }
       } else {
         DB = { ...remoto, saldoCaixa: remoto.saldoCaixa ?? local.saldoCaixa ?? 0 };
         saveData(DB);
@@ -743,10 +858,10 @@ function App() {
     if (!driveConnected || !sharedFolderId || !clientId || !dataFileId) return;
     try {
       const token = await getDriveToken(clientId);
-      await saveFaturasToDrive(token, dataFileId, DB);
+      await saveFaturasToSheet(token, dataFileId, DB);
       setUltimaSincr(new Date());
     } catch (e) {
-      showToast('⚠️ Falha ao gravar no Drive: ' + (e.message || ''), 'error');
+      showToast('⚠️ Falha ao gravar na planilha: ' + (e.message || ''), 'error');
     }
   }, [driveConnected, sharedFolderId, clientId, dataFileId]);
 
@@ -1060,7 +1175,12 @@ function App() {
               </div>
               {driveConnected && (
                 sharedFolderId
-                  ? <p className="text-xs text-green-400">✓ Arquivos vão para a <b>pasta compartilhada</b>, organizados em subpastas <code className="bg-slate-900 px-1 rounded">MM_YYYY/</code> pelo mês de competência — toda a equipe vê os mesmos arquivos.</p>
+                  ? <div className="space-y-2">
+                      <p className="text-xs text-green-400">✓ PDFs na <b>pasta compartilhada</b> em subpastas <code className="bg-slate-900 px-1 rounded">MM_YYYY/</code>. Lista de faturas numa <b>planilha</b> (<code className="bg-slate-900 px-1 rounded">{SHEET_FILE_NAME}</code>) no mesmo lugar — toda a equipe vê os mesmos dados.</p>
+                      {dataFileId && (
+                        <a href={`https://docs.google.com/spreadsheets/d/${dataFileId}/edit`} target="_blank" rel="noopener" className="inline-block px-3 py-1.5 rounded-lg text-xs bg-slate-700 hover:bg-slate-600 text-slate-200">📊 Abrir planilha no Sheets</a>
+                      )}
+                    </div>
                   : <p className="text-xs text-yellow-400">⚠️ Sem pasta compartilhada configurada — arquivos vão para o <b>seu Drive pessoal</b> e <b>não serão visíveis para a equipe</b>. Cole o ID acima para centralizar.</p>
               )}
             </div>
